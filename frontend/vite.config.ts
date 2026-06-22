@@ -6,8 +6,12 @@ export default defineConfig({
   server: {
     port: 3000,
     proxy: {
+      '/chat': {
+        target: 'http://127.0.0.1:8000',
+        changeOrigin: true,
+      },
       '/itinerary': {
-        target: 'http://localhost:8000',
+        target: 'http://127.0.0.1:8000',
         changeOrigin: true,
       },
     },

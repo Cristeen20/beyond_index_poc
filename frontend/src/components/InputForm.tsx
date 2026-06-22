@@ -1,90 +1,52 @@
-import { useState, type FormEvent } from 'react'
-import type { ItineraryRequest } from '../types'
+import { useState, type FormEvent, type KeyboardEvent } from 'react'
 
 interface Props {
-  onSubmit: (req: ItineraryRequest) => void
+  onSubmit: (text: string) => void
+  disabled?: boolean
 }
 
-export default function InputForm({ onSubmit }: Props) {
-  const [destination, setDestination] = useState('')
-  const [days, setDays] = useState(3)
-  const [interests, setInterests] = useState('')
-  const [startDate, setStartDate] = useState('')
-  const [expanded, setExpanded] = useState(false)
+export default function InputForm({ onSubmit, disabled }: Props) {
+  const [text, setText] = useState('')
+
+  function submit() {
+    const trimmed = text.trim()
+    if (!trimmed || disabled) return
+    onSubmit(trimmed)
+    setText('')
+  }
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault()
-    if (!destination.trim()) return
-    onSubmit({
-      destination: destination.trim(),
-      days,
-      interests: interests
-        .split(',')
-        .map((s) => s.trim())
-        .filter(Boolean),
-      startDate: startDate || undefined,
-    })
-    setDestination('')
-    setInterests('')
-    setStartDate('')
-    setDays(3)
+    submit()
+  }
+
+  function handleKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault()
+      submit()
+    }
   }
 
   return (
     <form className="input-form" onSubmit={handleSubmit}>
       <div className="input-row">
-        <input
+        <textarea
           className="input-destination"
-          type="text"
-          placeholder="Where to? e.g. Kyoto, Japan"
-          value={destination}
-          onChange={(e) => setDestination(e.target.value)}
-          required
+          placeholder="Ask about a destination, get recommendations, or request an itinerary… (Shift+Enter for new line)"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={handleKeyDown}
+          rows={2}
+          disabled={disabled}
         />
         <button
-          type="button"
-          className="btn-expand"
-          title="More options"
-          onClick={() => setExpanded((v) => !v)}
+          type="submit"
+          className="btn-send"
+          disabled={!text.trim() || disabled}
         >
-          {expanded ? '▲' : '▼'}
-        </button>
-        <button type="submit" className="btn-send" disabled={!destination.trim()}>
-          Generate ↗
+          Send ↗
         </button>
       </div>
-
-      {expanded && (
-        <div className="input-extras">
-          <label>
-            <span>Days</span>
-            <input
-              type="number"
-              min={1}
-              max={14}
-              value={days}
-              onChange={(e) => setDays(Number(e.target.value))}
-            />
-          </label>
-          <label>
-            <span>Interests</span>
-            <input
-              type="text"
-              placeholder="temples, food, hiking"
-              value={interests}
-              onChange={(e) => setInterests(e.target.value)}
-            />
-          </label>
-          <label>
-            <span>Start date</span>
-            <input
-              type="date"
-              value={startDate}
-              onChange={(e) => setStartDate(e.target.value)}
-            />
-          </label>
-        </div>
-      )}
     </form>
   )
 }

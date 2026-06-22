@@ -80,6 +80,7 @@
   border: 1px solid #ffffff10;
   border-bottom-left-radius: 4px;
   color: var(--cloud);
+  white-space: pre-wrap;
 }
 
 .bubble-error {
@@ -279,24 +280,13 @@
   font-size: 14px;
   padding: 9px 14px;
   outline: none;
+  resize: none;
+  line-height: 1.5;
   transition: border-color .15s;
 }
 
 .input-destination::placeholder { color: var(--ice); }
 .input-destination:focus { border-color: var(--teal); }
-
-.btn-expand {
-  background: none;
-  border: 1px solid #ffffff20;
-  color: var(--ice);
-  border-radius: 8px;
-  padding: 8px 10px;
-  cursor: pointer;
-  font-size: 11px;
-  transition: border-color .15s, color .15s;
-}
-
-.btn-expand:hover { border-color: var(--jade); color: var(--jade); }
 
 .btn-send {
   background: var(--teal);
@@ -315,41 +305,3 @@
 .btn-send:hover:not(:disabled) { background: var(--jade); }
 .btn-send:disabled { opacity: .4; cursor: not-allowed; }
 
-/* ── Expanded options ───────────────────────────────── */
-.input-extras {
-  display: flex;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-
-.input-extras label {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  flex: 1;
-  min-width: 140px;
-}
-
-.input-extras label span {
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: .06em;
-  text-transform: uppercase;
-  color: var(--ice);
-}
-
-.input-extras input {
-  background: var(--slate);
-  border: 1px solid #ffffff18;
-  border-radius: 8px;
-  color: var(--cloud);
-  font-family: var(--font);
-  font-size: 13px;
-  padding: 7px 10px;
-  outline: none;
-  transition: border-color .15s;
-}
-
-.input-extras input::placeholder { color: var(--ice); }
-.input-extras input:focus { border-color: var(--teal); }
-.input-extras input[type="number"] { width: 70px; flex: none; }

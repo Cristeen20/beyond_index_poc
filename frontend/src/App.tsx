@@ -1,70 +1,62 @@
 import { useState, useRef, useEffect } from 'react'
-import type { Message, ItineraryRequest, Itinerary } from './types'
+import type { Message, ChatRequest, ChatResponse } from './types'
 import ChatMessage from './components/ChatMessage'
 import InputForm from './components/InputForm'
 import './App.css'
 
 export default function App() {
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      id: 'welcome',
-      role: 'assistant',
-      itinerary: undefined,
-      errorText: undefined,
-      isLoading: false,
-    },
-  ])
+  const [messages, setMessages] = useState<Message[]>([])
+  const [isLoading, setIsLoading] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
-  async function handleSubmit(req: ItineraryRequest) {
-    const userMsg: Message = {
-      id: crypto.randomUUID(),
-      role: 'user',
-      userRequest: req,
-    }
-    const loadingMsg: Message = {
-      id: crypto.randomUUID(),
-      role: 'assistant',
-      isLoading: true,
-    }
+  async function handleSubmit(text: string) {
+    const userMsg: Message = { id: crypto.randomUUID(), role: 'user', text }
+    const loadingMsg: Message = { id: crypto.randomUUID(), role: 'assistant', isLoading: true }
 
     setMessages((prev) => [...prev, userMsg, loadingMsg])
+    setIsLoading(true)
+
+    // Build history from settled messages (no loading or error entries)
+    const history = messages
+      .filter((m) => !m.isLoading && !m.errorText && m.text)
+      .map((m) => ({ role: m.role, content: m.text! }))
+
+    const req: ChatRequest = { message: text, history }
 
     try {
-      const res = await fetch('/itinerary', {
+      const res = await fetch('/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(req),
       })
 
       if (!res.ok) {
-        const text = await res.text()
-        throw new Error(`${res.status}: ${text}`)
+        const errText = await res.text()
+        throw new Error(`${res.status}: ${errText}`)
       }
 
-      const itinerary: Itinerary = await res.json()
+      const data: ChatResponse = await res.json()
 
       setMessages((prev) =>
         prev.map((m) =>
           m.id === loadingMsg.id
-            ? { ...m, isLoading: false, itinerary }
+            ? { ...m, isLoading: false, text: data.text, itinerary: data.itinerary }
             : m,
         ),
       )
     } catch (err) {
-      const errorText =
-        err instanceof Error ? err.message : 'Unknown error'
+      const errorText = err instanceof Error ? err.message : 'Unknown error'
       setMessages((prev) =>
         prev.map((m) =>
-          m.id === loadingMsg.id
-            ? { ...m, isLoading: false, errorText }
-            : m,
+          m.id === loadingMsg.id ? { ...m, isLoading: false, errorText } : m,
         ),
       )
+    } finally {
+      setIsLoading(false)
     }
   }
 
@@ -72,24 +64,26 @@ export default function App() {
     <div className="app">
       <header className="app-header">
         <span className="header-icon">✈</span>
-        <h1>Trip Itinerary Generator</h1>
+        <h1>Trip Planner</h1>
         <span className="header-badge">POC</span>
       </header>
 
       <main className="chat-window">
-        <div className="welcome-hint">
-          Describe a trip — destination, how many days, and what you enjoy.
-          The backend will fetch live place data and generate a day-by-day
-          itinerary.
-        </div>
-        {messages.slice(1).map((msg) => (
+        {messages.length === 0 && (
+          <div className="welcome-hint">
+            Ask about destinations, get place recommendations, or request a full itinerary.
+            <br />
+            Try: "What are the best spots in Niagara?" or "I'm looking for a historic trip in Ontario — suggest some places."
+          </div>
+        )}
+        {messages.map((msg) => (
           <ChatMessage key={msg.id} message={msg} />
         ))}
         <div ref={bottomRef} />
       </main>
 
       <footer className="chat-footer">
-        <InputForm onSubmit={handleSubmit} />
+        <InputForm onSubmit={handleSubmit} disabled={isLoading} />
       </footer>
     </div>
   )

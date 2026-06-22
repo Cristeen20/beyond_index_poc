@@ -1,10 +1,3 @@
-export interface ItineraryRequest {
-  destination: string
-  days: number
-  interests: string[]
-  startDate?: string
-}
-
 export interface Stop {
   name: string
   time: string
@@ -25,10 +18,25 @@ export interface Itinerary {
   advisories: string[]
 }
 
+export interface ChatHistoryItem {
+  role: string
+  content: string
+}
+
+export interface ChatRequest {
+  message: string
+  history: ChatHistoryItem[]
+}
+
+export interface ChatResponse {
+  text: string
+  itinerary?: Itinerary
+}
+
 export interface Message {
   id: string
   role: 'user' | 'assistant'
-  userRequest?: ItineraryRequest
+  text?: string
   itinerary?: Itinerary
   errorText?: string
   isLoading?: boolean
