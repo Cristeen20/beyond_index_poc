@@ -15,6 +15,9 @@ from models import (
 )
 from orchestrator import generate_itinerary, chat as chat_handler
 
+from agent_models import PlanRequest, PlanResponse
+from travel_orchestrator import plan as plan_handler
+
 
 app = FastAPI(title="Trip Itinerary Generator", version="0.1.0")
 
@@ -45,6 +48,20 @@ async def chat_endpoint(req: ChatRequest) -> ChatResponse:
 async def create_itinerary(req: ItineraryRequest) -> Itinerary:
     try:
         return await generate_itinerary(req)
+    except KeyError as exc:
+        raise HTTPException(status_code=500, detail=f"Missing env var: {exc}") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/plan", response_model=PlanResponse)
+async def plan_endpoint(req: PlanRequest) -> PlanResponse:
+    """Entry point for the Itinerary Agent architecture (see itenary_agent.md).
+
+    Runs the Intake Router → DIRECT (targeted lookup) or FULL (full plan).
+    """
+    try:
+        return await plan_handler(req)
     except KeyError as exc:
         raise HTTPException(status_code=500, detail=f"Missing env var: {exc}") from exc
     except Exception as exc:
