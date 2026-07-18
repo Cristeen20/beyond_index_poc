@@ -6,3 +6,4 @@ pydantic>=2.9.0
 python-dotenv>=1.0.0
 python-multipart>=0.0.9
 twilio>=9.3.0
+langgraph>=0.2.60

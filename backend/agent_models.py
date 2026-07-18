@@ -7,8 +7,9 @@ breaking the existing POC.
 
 from __future__ import annotations
 
+import operator
 from datetime import date, datetime, time
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field
 
@@ -240,11 +241,12 @@ class PlanningState(BaseModel):
     user_profile: UserProfile | None = None
     trip_request: TripRequest | None = None
 
-    # Agent outputs
-    route_options: list[RouteOption] = []
-    hotel_options: list[HotelOption] = []
-    restaurant_options: list[RestaurantOption] = []
-    event_options: list[EventOption] = []
+    # Agent outputs — Annotated reducers let the four parallel dispatch nodes
+    # in the LangGraph travel graph merge into the same state without racing.
+    route_options: Annotated[list[RouteOption], operator.add] = []
+    hotel_options: Annotated[list[HotelOption], operator.add] = []
+    restaurant_options: Annotated[list[RestaurantOption], operator.add] = []
+    event_options: Annotated[list[EventOption], operator.add] = []
 
     # Itinerary (current state)
     itinerary: Itinerary | None = None
@@ -257,6 +259,23 @@ class PlanningState(BaseModel):
     # Workflow control
     phase: Phase = "routing"
     agent_outputs_received: dict[str, bool] = {}
+
+    # Graph-only inputs / outputs (used by the LangGraph nodes in
+    # backend/graph/ — see graph/state.py for the projection helpers).
+    incoming_message: str = ""
+    history: list[dict] = []
+    response_message: str = ""
+    followup_question: str | None = None
+    error_notes: list[str] = []
+    repair_attempts: int = 0
+
+    # Itinerary sub-graph scratchpad — populated in order by
+    # allocate_budget → run_llm_planner → check_conflicts.
+    chosen_route: RouteOption | None = None
+    budget: BudgetBreakdown | None = None
+    draft_itinerary: dict | None = None
+    conflict_notes: list[str] = []
+    changes_summary: str = ""
 
 
 # --------------------------------------------------------------------------- #
