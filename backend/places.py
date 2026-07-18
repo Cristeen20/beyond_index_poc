@@ -61,6 +61,7 @@ def _normalise(raw: dict[str, Any]) -> dict[str, Any]:
         "types": raw.get("types", [])[:3],
         "summary": raw.get("editorialSummary", {}).get("text", ""),
         "open_now": hours.get("openNow"),
+        "weekday_hours": hours.get("weekdayDescriptions", []),
         "price_level": raw.get("priceLevel"),
     }
 

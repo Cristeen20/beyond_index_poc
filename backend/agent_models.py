@@ -197,7 +197,10 @@ AgentName = Literal["route", "hotel", "restaurant", "event"]
 
 
 class IntentClassification(BaseModel):
-    route: Literal["direct", "full"]
+    # conversational: LLM-only reply (no Google-backed agents)
+    # direct:         targeted lookup — subset of Google-backed agents
+    # full:           complete day-by-day itinerary — all agents + Itinerary Agent
+    route: Literal["conversational", "direct", "full"]
     target_agents: list[AgentName] = []
     extracted_slots: dict[str, str] = {}
     missing_required_slots: list[str] = []
@@ -271,9 +274,38 @@ class PlanRequest(BaseModel):
 
 
 class PlanResponse(BaseModel):
-    route: Literal["direct", "full"]
+    route: Literal["conversational", "direct", "full"]
     intent: IntentClassification
     itinerary: Itinerary | None = None
     direct_result: list[dict] | None = None
     followup_question: str | None = None
+    message: str = ""
+
+
+# --------------------------------------------------------------------------- #
+# Revision loop (§4 Step 6)
+# --------------------------------------------------------------------------- #
+
+
+class ReviseRequest(BaseModel):
+    """Round-trip revision — client sends back the current itinerary + feedback.
+
+    Optional cached agent-option lists let the client avoid re-hitting the
+    sub-agents; if omitted, the orchestrator refetches them from trip_request.
+    """
+
+    itinerary: Itinerary
+    feedback: str
+    trip_request: TripRequest
+    user_profile: UserProfile | None = None
+    route_options: list[RouteOption] = []
+    hotel_options: list[HotelOption] = []
+    restaurant_options: list[RestaurantOption] = []
+    event_options: list[EventOption] = []
+
+
+class ReviseResponse(BaseModel):
+    itinerary: Itinerary
+    changes_summary: str = ""
+    conflicts_remaining: list[str] = []
     message: str = ""

@@ -1,10 +1,14 @@
 import json
+import logging
+
 import openai
 
 from models import ItineraryRequest, Itinerary, ChatRequest, ChatResponse
 from places import fetch_places
 from directions import get_travel_times
 from search import fetch_advisories
+
+logger = logging.getLogger("chat_orchestrator")
 
 
 _client: openai.AsyncOpenAI | None = None
@@ -165,9 +169,12 @@ async def chat(req: ChatRequest) -> ChatResponse:
         messages.append({"role": m.role, "content": m.content})
     messages.append({"role": "user", "content": req.message})
 
+    logger.info("chat: incoming message=%r history_len=%d",
+                req.message, len(req.history))
+
     client = _get_client()
 
-    for _ in range(6):
+    for turn in range(6):
         response = await client.chat.completions.create(
             model="gpt-4o",
             max_tokens=2048,
@@ -177,16 +184,27 @@ async def chat(req: ChatRequest) -> ChatResponse:
         choice = response.choices[0]
 
         if not choice.message.tool_calls:
+            logger.info("chat: turn=%d → plain reply (no tool calls)", turn)
             return ChatResponse(text=choice.message.content or "")
 
         messages.append(choice.message)
+        logger.info(
+            "chat: turn=%d tool_calls=%s",
+            turn,
+            [tc.function.name for tc in choice.message.tool_calls],
+        )
 
         itinerary_result: Itinerary | None = None
         tool_results: list[dict] = []
 
         for tc in choice.message.tool_calls:
             if tc.function.name == "return_itinerary":
-                itinerary_result = Itinerary(**json.loads(tc.function.arguments))
+                args = json.loads(tc.function.arguments)
+                logger.info(
+                    "chat: tool_call=return_itinerary destination=%r days=%d",
+                    args.get("destination"), len(args.get("days") or []),
+                )
+                itinerary_result = Itinerary(**args)
                 tool_results.append({
                     "role": "tool",
                     "tool_call_id": tc.id,
@@ -195,7 +213,12 @@ async def chat(req: ChatRequest) -> ChatResponse:
 
             elif tc.function.name == "fetch_places_data":
                 args = json.loads(tc.function.arguments)
+                logger.info(
+                    "chat: tool_call=fetch_places_data destination=%r interests=%s",
+                    args["destination"], args.get("interests", []),
+                )
                 places = await fetch_places(args["destination"], args.get("interests", []))
+                logger.info("chat: fetch_places_data → %d places", len(places))
 
                 travel_matrix: list[list[str]] = []
                 place_names: list[str] = []

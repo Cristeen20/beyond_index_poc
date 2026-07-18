@@ -9,9 +9,12 @@ have a proper provider (flights, live availability, etc.).
 from __future__ import annotations
 
 import asyncio
+import logging
 import uuid
 from datetime import date, datetime, timedelta, time
 from typing import Any
+
+logger = logging.getLogger("sub_agents")
 
 from agent_models import (
     EventOption,
@@ -72,6 +75,17 @@ def _classify_meal_type(types: list[str]) -> str:
     if "meal_delivery" in tset or "meal_takeaway" in tset:
         return "lunch"
     return "dinner"
+
+
+def _parse_opening_hours(descriptions: list[str]) -> dict[str, str] | None:
+    if not descriptions:
+        return None
+    out: dict[str, str] = {}
+    for entry in descriptions:
+        day, sep, hours = entry.partition(":")
+        if sep and day.strip() and hours.strip():
+            out[day.strip().lower()] = hours.strip()
+    return out or None
 
 
 def _guess_cuisine(name: str, types: list[str]) -> str:
@@ -162,7 +176,7 @@ async def run_restaurant_agent(
                 longitude=float(r["lng"]),
                 avg_cost_per_person=_price_from_level(r.get("price_level"), default=25.0),
                 rating=float(r.get("rating") or 0.0),
-                opening_hours=None,
+                opening_hours=_parse_opening_hours(r.get("weekday_hours", [])),
             )
         )
     restaurants.sort(key=lambda x: -x.rating)
@@ -306,9 +320,16 @@ async def dispatch_agents(
     prefs: UserPreferences | None = None,
 ) -> dict[str, Any]:
     """Fan out the selected sub-agents concurrently and return their outputs."""
+    logger.info("dispatch_agents: agents=%s destination=%r",
+                target_agents, trip.destination)
     coros = [AGENT_RUNNERS[a](trip, prefs) for a in target_agents]
     results = await asyncio.gather(*coros, return_exceptions=True)
     out: dict[str, Any] = {}
     for name, res in zip(target_agents, results):
-        out[name] = [] if isinstance(res, Exception) else res
+        if isinstance(res, Exception):
+            logger.warning("agent %s raised: %s", name, res)
+            out[name] = []
+        else:
+            logger.info("agent %s → %d options", name, len(res))
+            out[name] = res
     return out

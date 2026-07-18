@@ -9,11 +9,14 @@ LangGraph sub-graph without changing the step boundaries.
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from datetime import date, datetime, timedelta
 from typing import Any
 
 import openai
+
+logger = logging.getLogger("itinerary_agent")
 
 from agent_models import (
     BudgetBreakdown,
@@ -260,25 +263,43 @@ def _build_planner_prompt(
     )
 
 
-async def _run_llm_planner(prompt: str) -> dict[str, Any]:
+_PLANNER_SYSTEM = (
+    "You are the Itinerary Planning Engine. Produce a day-by-day plan "
+    "that is realistic, geographically sensible, and within budget."
+)
+
+
+async def _run_llm_planner(
+    prompt: str,
+    extra_messages: list[dict] | None = None,
+) -> dict[str, Any]:
+    """Call the planner tool. `extra_messages` is appended before the final
+    user prompt — used by the repair pass to show a prior draft + conflicts."""
+    messages: list[dict] = [
+        {"role": "system", "content": _PLANNER_SYSTEM},
+        {"role": "user", "content": prompt},
+    ]
+    if extra_messages:
+        messages.extend(extra_messages)
+
+    logger.info("tool_call → return_itinerary (mode=%s)",
+                "repair" if extra_messages else "initial")
     resp = await _get_client().chat.completions.create(
         model="gpt-4o",
         max_tokens=4096,
         tools=[_ITINERARY_TOOL],
         tool_choice={"type": "function", "function": {"name": "return_itinerary"}},
-        messages=[
-            {
-                "role": "system",
-                "content": (
-                    "You are the Itinerary Planning Engine. Produce a day-by-day plan "
-                    "that is realistic, geographically sensible, and within budget."
-                ),
-            },
-            {"role": "user", "content": prompt},
-        ],
+        messages=messages,
     )
     tc = resp.choices[0].message.tool_calls[0]
-    return json.loads(tc.function.arguments)
+    args = json.loads(tc.function.arguments)
+    logger.info(
+        "tool_result ← return_itinerary title=%r days=%d segments=%d",
+        args.get("title"),
+        len(args.get("days") or []),
+        sum(len(d.get("segments") or []) for d in (args.get("days") or [])),
+    )
+    return args
 
 
 # --------------------------------------------------------------------------- #
@@ -371,6 +392,62 @@ def _hydrate_days(
 
 
 # --------------------------------------------------------------------------- #
+# Generate-with-repair (shared by initial planning and revision)
+# --------------------------------------------------------------------------- #
+
+
+async def _generate_with_repair(
+    prompt: str,
+    hotels_by_id: dict[str, HotelOption],
+    budget: BudgetBreakdown,
+) -> tuple[dict[str, Any], list[DayPlan], list[str]]:
+    """Run the planner LLM, and if the draft has conflicts, run a single
+    repair pass. Returns (raw_result, hydrated_days, remaining_conflicts).
+
+    One repair pass only — bounds latency and cost while catching the common
+    cases (overlapping segments, minor budget overruns) that pure prompting
+    tends to produce.
+    """
+    raw = await _run_llm_planner(prompt)
+    days = _hydrate_days(raw.get("days", []), hotels_by_id)
+    conflicts = resolve_conflicts(days, budget)
+
+    if not conflicts:
+        logger.info("no conflicts — skipping repair pass")
+        return raw, days, []
+
+    logger.info("repair pass triggered — %d conflict(s): %s",
+                len(conflicts), conflicts)
+
+    repair_msg = (
+        "Your previous draft had these issues — return a corrected itinerary "
+        "using the same tool. Keep as much of the plan as possible; only "
+        "change what's needed to resolve the issues.\n\n"
+        f"DRAFT:\n{json.dumps(raw, indent=2)}\n\n"
+        f"ISSUES:\n- " + "\n- ".join(conflicts)
+    )
+    raw2 = await _run_llm_planner(
+        prompt,
+        extra_messages=[
+            {"role": "assistant", "content": json.dumps(raw)},
+            {"role": "user", "content": repair_msg},
+        ],
+    )
+    days2 = _hydrate_days(raw2.get("days", []), hotels_by_id)
+    remaining = resolve_conflicts(days2, budget)
+    logger.info("repair pass done — %d conflict(s) remain", len(remaining))
+    return raw2, days2, remaining
+
+
+def _compute_total_cost(days: list[DayPlan], budget: BudgetBreakdown) -> float:
+    return (
+        budget.transport
+        + sum((d.accommodation.price_per_night if d.accommodation else 0.0) for d in days)
+        + sum(s.cost for d in days for s in d.segments)
+    )
+
+
+# --------------------------------------------------------------------------- #
 # Entry point — runs the whole planning engine
 # --------------------------------------------------------------------------- #
 
@@ -380,6 +457,11 @@ async def run_planning(state: PlanningState) -> Itinerary:
     trip = state.trip_request
     if trip is None:
         raise ValueError("PlanningState.trip_request is required")
+    logger.info(
+        "run_planning: %s → %s | %s–%s | %d travelers | $%.0f %s",
+        trip.origin, trip.destination, trip.start_date, trip.end_date,
+        trip.travelers, trip.total_budget, trip.currency,
+    )
 
     # Step 1 — Load
     ok, errors = load_agent_data(state)
@@ -397,7 +479,7 @@ async def run_planning(state: PlanningState) -> Itinerary:
     # Step 2 — Budget
     budget = allocate_budget(trip, style, chosen_route)
 
-    # Step 3+5 — Schedule & generate (LLM)
+    # Step 3+4+5 — Schedule, generate, and repair any conflicts.
     prompt = _build_planner_prompt(
         trip=trip,
         user=state.user_profile,
@@ -407,29 +489,150 @@ async def run_planning(state: PlanningState) -> Itinerary:
         events=state.event_options,
         budget=budget,
     )
-    raw = await _run_llm_planner(prompt)
-
     hotels_by_id = {h.hotel_id: h for h in state.hotel_options}
-    days = _hydrate_days(raw.get("days", []), hotels_by_id)
+    raw, days, remaining_conflicts = await _generate_with_repair(prompt, hotels_by_id, budget)
 
-    # Step 4 — Conflict resolution notes
-    conflict_notes = resolve_conflicts(days, budget)
-
-    total_cost = (
-        budget.transport
-        + sum((d.accommodation.price_per_night if d.accommodation else 0.0) for d in days)
-        + sum(s.cost for d in days for s in d.segments)
-    )
-
-    itinerary = Itinerary(
+    return Itinerary(
         trip_id=str(uuid.uuid4()),
         user_id=(state.user_profile.user_id if state.user_profile else "anonymous"),
         title=raw.get("title") or f"{trip.num_days}-day trip to {trip.destination}",
         days=days,
-        total_cost=total_cost,
+        total_cost=_compute_total_cost(days, budget),
         budget_breakdown=budget,
-        notes=(raw.get("notes") or []) + conflict_notes,
+        notes=(raw.get("notes") or []) + remaining_conflicts,
         created_at=datetime.utcnow(),
         version=1,
     )
-    return itinerary
+
+
+# --------------------------------------------------------------------------- #
+# Revision loop (§4 Step 6)
+# --------------------------------------------------------------------------- #
+
+
+def _serialise_itinerary_for_llm(it: Itinerary) -> dict[str, Any]:
+    """Compact JSON view of an existing itinerary — day/segment shape the
+    planner tool schema already understands, so the LLM can edit in place."""
+    return {
+        "title": it.title,
+        "version": it.version,
+        "total_cost": it.total_cost,
+        "notes": it.notes,
+        "days": [
+            {
+                "day_number": d.day_number,
+                "date": d.date.isoformat(),
+                "day_name": d.day_name,
+                "location": d.location,
+                "accommodation_hotel_id": (d.accommodation.hotel_id if d.accommodation else None),
+                "segments": [
+                    {
+                        "start_time": s.start_time.strftime("%H:%M"),
+                        "end_time": s.end_time.strftime("%H:%M"),
+                        "type": s.type,
+                        "title": s.title,
+                        "description": s.description,
+                        "location": s.location,
+                        "cost": s.cost,
+                        "item_ref": s.item_ref,
+                    }
+                    for s in d.segments
+                ],
+                "notes": d.notes,
+            }
+            for d in it.days
+        ],
+    }
+
+
+def _build_revision_prompt(
+    trip: TripRequest,
+    user: UserProfile | None,
+    route: RouteOption,
+    hotels: list[HotelOption],
+    restaurants: list[RestaurantOption],
+    events: list[EventOption],
+    budget: BudgetBreakdown,
+    current: Itinerary,
+    feedback: str,
+) -> str:
+    base = _build_planner_prompt(trip, user, route, hotels, restaurants, events, budget)
+    return (
+        "REVISE the existing itinerary below according to the user's feedback.\n"
+        "Keep everything the user did NOT complain about — only change what's\n"
+        "needed to satisfy the feedback. All rules from the planner still apply.\n\n"
+        f"USER FEEDBACK:\n{feedback}\n\n"
+        f"CURRENT ITINERARY:\n{json.dumps(_serialise_itinerary_for_llm(current), indent=2)}\n\n"
+        f"{base}"
+    )
+
+
+def _diff_summary(before: Itinerary, after: Itinerary) -> str:
+    """Human-readable diff of segment counts, cost, and hotel swaps."""
+    lines: list[str] = []
+    if abs(after.total_cost - before.total_cost) > 1.0:
+        delta = after.total_cost - before.total_cost
+        sign = "+" if delta >= 0 else "-"
+        lines.append(f"Total cost {sign}${abs(delta):.0f} (now ${after.total_cost:.0f}).")
+    for b, a in zip(before.days, after.days):
+        b_hotel = b.accommodation.name if b.accommodation else None
+        a_hotel = a.accommodation.name if a.accommodation else None
+        if b_hotel != a_hotel:
+            lines.append(f"Day {a.day_number}: hotel {b_hotel!r} → {a_hotel!r}.")
+        if len(b.segments) != len(a.segments):
+            lines.append(
+                f"Day {a.day_number}: {len(b.segments)} → {len(a.segments)} segments."
+            )
+    if len(after.days) != len(before.days):
+        lines.append(f"Trip length: {len(before.days)} → {len(after.days)} days.")
+    return " ".join(lines) if lines else "Minor adjustments applied."
+
+
+async def revise_itinerary(state: PlanningState) -> Itinerary:
+    """Re-plan the current itinerary using state.revision_feedback."""
+    trip = state.trip_request
+    current = state.itinerary
+    feedback = state.revision_feedback
+    if trip is None or current is None or not feedback:
+        raise ValueError(
+            "revise_itinerary requires trip_request, itinerary, and revision_feedback"
+        )
+    logger.info("revise_itinerary: v%d → v%d | feedback=%r",
+                current.version, current.version + 1, feedback)
+
+    ok, errors = load_agent_data(state)
+    if not ok:
+        raise RuntimeError("Missing agent outputs: " + "; ".join(errors))
+
+    chosen_route = min(state.route_options, key=lambda r: r.total_cost)
+    style = (
+        state.user_profile.preferences.travel_style
+        if state.user_profile else "balanced"
+    )
+    budget = allocate_budget(trip, style, chosen_route)
+
+    prompt = _build_revision_prompt(
+        trip=trip,
+        user=state.user_profile,
+        route=chosen_route,
+        hotels=state.hotel_options,
+        restaurants=state.restaurant_options,
+        events=state.event_options,
+        budget=budget,
+        current=current,
+        feedback=feedback,
+    )
+    hotels_by_id = {h.hotel_id: h for h in state.hotel_options}
+    raw, days, remaining_conflicts = await _generate_with_repair(prompt, hotels_by_id, budget)
+
+    return Itinerary(
+        trip_id=current.trip_id,
+        user_id=current.user_id,
+        title=raw.get("title") or current.title,
+        days=days,
+        total_cost=_compute_total_cost(days, budget),
+        budget_breakdown=budget,
+        notes=(raw.get("notes") or []) + remaining_conflicts,
+        created_at=datetime.utcnow(),
+        version=current.version + 1,
+    )

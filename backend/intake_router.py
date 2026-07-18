@@ -11,11 +11,14 @@ missing required slots per §3.4.
 from __future__ import annotations
 
 import json
+import logging
 from typing import Iterable
 
 import openai
 
 from agent_models import REQUIRED_SLOTS, IntentClassification, UserProfile
+
+logger = logging.getLogger("intake_router")
 
 
 # Confidence threshold below which we default to FULL (§1.5 routing table).
@@ -27,8 +30,9 @@ _ROUTER_TOOL = {
     "function": {
         "name": "classify_intent",
         "description": (
-            "Classify the user's request as DIRECT (targeted agent lookup) or "
-            "FULL (needs a full day-by-day itinerary). Extract any slots you can."
+            "Classify the user's request as CONVERSATIONAL (LLM answers from "
+            "knowledge, no APIs), DIRECT (targeted Google-backed lookup), or "
+            "FULL (day-by-day itinerary). Extract any slots you can."
         ),
         "parameters": {
             "type": "object",
@@ -36,10 +40,14 @@ _ROUTER_TOOL = {
             "properties": {
                 "route": {
                     "type": "string",
-                    "enum": ["direct", "full"],
+                    "enum": ["conversational", "direct", "full"],
                     "description": (
+                        "'conversational' for general questions the LLM can answer "
+                        "from its own knowledge — travel tips, weather, packing, visa, "
+                        "cultural/etiquette info, currency, greetings, follow-ups that "
+                        "don't need live data. NO agents dispatched.\n"
                         "'direct' for a narrow query targeting specific agent capabilities "
-                        "(hotels, restaurants, routes, events) with enough entities to act. "
+                        "(hotels, restaurants, routes, events) with enough entities to act.\n"
                         "'full' for a trip/plan request, vague query, or day-by-day schedule."
                     ),
                 },
@@ -73,21 +81,34 @@ _ROUTER_TOOL = {
 
 _ROUTER_SYSTEM = (
     "You are the Intake Router for a travel planning system. On every turn you "
-    "decide whether the user's request should take the DIRECT path (targeted "
-    "lookup via a subset of agents) or the FULL path (a full day-by-day "
-    "itinerary planned by the Itinerary Agent).\n\n"
-    "Choose DIRECT when the user asks a narrow question that fits one or two "
-    "of these capabilities and gives enough entities to act on:\n"
-    "  - hotel: find/recommend hotels\n"
-    "  - restaurant: find/recommend restaurants or cafes\n"
-    "  - route: find flights/trains/buses between cities\n"
-    "  - event: find things to do, attractions, museums, festivals\n"
-    "Examples: 'find 4-star hotels in Kyoto next weekend', 'best ramen in Tokyo', "
-    "'trains from Rome to Florence on Friday'.\n\n"
-    "Choose FULL when the request spans the whole trip, is vague ('plan a trip'), "
-    "or explicitly asks for a day-by-day schedule.\n\n"
-    "Extract every slot you can from the message + history. If unsure, lower your "
-    "confidence; anything below ~0.55 will be safely routed to FULL by the system."
+    "decide which of THREE paths handles the request:\n\n"
+    "1) CONVERSATIONAL — the LLM answers from its own knowledge; no Google APIs "
+    "   or agents are called. Use this for:\n"
+    "   - general travel tips, best time to visit, cultural etiquette, safety\n"
+    "   - visa / entry requirements, currency, tipping norms\n"
+    "   - weather patterns, packing advice, language basics\n"
+    "   - greetings, chit-chat, meta-questions ('what can you do?')\n"
+    "   - follow-up clarifications the LLM can answer without fresh data\n"
+    "   Examples: 'best time to visit Japan', 'do I need a visa for Kenya', "
+    "   'what's the tipping etiquette in Paris', 'hi'.\n\n"
+    "2) DIRECT — a narrow query that needs live Google-backed data for a subset "
+    "   of these capabilities:\n"
+    "   - hotel: find/recommend hotels\n"
+    "   - restaurant: find/recommend restaurants or cafes\n"
+    "   - route: find flights/trains/buses between cities\n"
+    "   - event: find things to do, attractions, museums, festivals\n"
+    "   Examples: 'find 4-star hotels in Kyoto next weekend', 'best ramen in "
+    "   Tokyo', 'trains from Rome to Florence on Friday'.\n\n"
+    "3) FULL — a full day-by-day itinerary planned by the Itinerary Agent. "
+    "   Use when the request spans the whole trip, is vague ('plan a trip'), "
+    "   or explicitly asks for a day-by-day schedule.\n\n"
+    "Rule of thumb: if the question is answerable from general knowledge and "
+    "does NOT require finding specific places/times/prices, choose "
+    "CONVERSATIONAL. If the user names or implies a place they want us to "
+    "find, choose DIRECT or FULL.\n\n"
+    "Extract every slot you can from the message + history. If unsure, lower "
+    "your confidence; anything below ~0.55 for a DIRECT route will be safely "
+    "escalated to FULL. CONVERSATIONAL is never escalated."
 )
 
 
@@ -151,19 +172,44 @@ async def classify(
     args = json.loads(tc.function.arguments)
 
     extracted = {**hydrated, **(args.get("extracted_slots") or {})}
-    route = args["route"]
-    target_agents = args.get("target_agents") or []
+    raw_route = args["route"]
+    raw_agents = args.get("target_agents") or []
     confidence = float(args.get("confidence") or 0.0)
 
+    logger.info(
+        "classifier raw: route=%s agents=%s confidence=%.2f slots=%s rationale=%s",
+        raw_route, raw_agents, confidence, extracted, args.get("rationale"),
+    )
+
     # Confidence gate — over-serve rather than mis-route.
+    #  - conversational: never downgraded; if wrong, worst case is a chatty reply
+    #  - direct: needs target_agents + confidence ≥ τ, else escalate to FULL
+    #  - full: default fan-out to all four agents
+    route = raw_route
+    target_agents = raw_agents
+    downgraded = False
     if route == "direct" and (confidence < CONFIDENCE_TAU or not target_agents):
         route = "full"
         target_agents = ["route", "hotel", "restaurant", "event"]
+        downgraded = True
 
     if route == "full" and not target_agents:
         target_agents = ["route", "hotel", "restaurant", "event"]
 
+    if route == "conversational":
+        target_agents = []  # never dispatch on the conversational path
+
     missing = slot_gate(target_agents, extracted) if route == "direct" else []
+
+    if downgraded:
+        logger.info(
+            "confidence gate downgraded direct→full (tau=%.2f, confidence=%.2f)",
+            CONFIDENCE_TAU, confidence,
+        )
+    logger.info(
+        "classified: route=%s agents=%s missing_slots=%s",
+        route, target_agents, missing,
+    )
 
     return IntentClassification(
         route=route,
