@@ -1,9 +1,4 @@
-"""Pydantic models for the Itinerary Agent architecture (§3 of itenary_agent.md).
-
-Kept separate from the legacy models.py (which the /chat and /itinerary
-endpoints still use) so the new dual-path flow can be introduced without
-breaking the existing POC.
-"""
+"""Pydantic models for the Itinerary Agent architecture (§3 of itenary_agent.md)."""
 
 from __future__ import annotations
 
