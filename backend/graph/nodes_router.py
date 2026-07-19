@@ -101,6 +101,19 @@ def route_after_intent(state: PlanningState) -> str:
     return "planning"
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
 async def answer_conversational(state: PlanningState) -> dict:
     """LLM-only reply — no agents dispatched."""
     messages: list[dict] = [{"role": "system", "content": _CONVERSATIONAL_SYSTEM}]
@@ -190,16 +203,7 @@ def check_slot_gate(state: PlanningState) -> dict:
     if intent is None:
         return {"missing_slots": [], "followup_question": None}
 
-    # Answer mode (place-lookup) has different requirements from booking
-    # searches: we just need a place_name and a location for the search
-    # context — dates/origin are irrelevant to "what time does X open?".
-    if intent.route == "direct" and intent.answer_mode == "answer":
-        missing: list[str] = []
-        if not intent.extracted_slots.get("place_name"):
-            missing.append("place_name")
-        if state.trip_request is None and not intent.extracted_slots.get("destination"):
-            missing.append("destination")
-    elif state.trip_request is None:
+    if state.trip_request is None:
         agents_for_gate = intent.target_agents or ["route", "hotel"]
         missing = slot_gate(agents_for_gate, intent.extracted_slots)
     elif intent.route == "direct":
