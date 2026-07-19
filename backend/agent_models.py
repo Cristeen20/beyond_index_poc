@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import operator
 from datetime import date, datetime, time
-from typing import Annotated, Literal
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -98,6 +97,11 @@ class HotelOption(BaseModel):
     amenities: list[str] = []
     check_in_time: time = time(15, 0)
     check_out_time: time = time(11, 0)
+    # Enriched fields from Google Places — populated when available; used
+    # by `answer_from_places` to answer factual questions ("phone number
+    # for X", "website of X"). Not rendered in list-mode bullets.
+    phone: str | None = None
+    website: str | None = None
 
 
 class RestaurantOption(BaseModel):
@@ -111,6 +115,9 @@ class RestaurantOption(BaseModel):
     avg_cost_per_person: float
     rating: float
     opening_hours: dict[str, str] | None = None
+    address: str = ""
+    phone: str | None = None
+    website: str | None = None
 
 
 class EventOption(BaseModel):
@@ -125,6 +132,9 @@ class EventOption(BaseModel):
     typical_hours: str | None = None
     best_time_of_day: Literal["morning", "afternoon", "evening", "flexible"] = "flexible"
     closed_days: list[str] = []
+    address: str = ""
+    phone: str | None = None
+    website: str | None = None
 
 
 # --------------------------------------------------------------------------- #
@@ -196,12 +206,21 @@ class IntentClassification(BaseModel):
     # conversational: LLM-only reply (no Google-backed agents)
     # direct:         targeted lookup — subset of Google-backed agents
     # full:           complete day-by-day itinerary — all agents + Itinerary Agent
-    route: Literal["conversational", "direct", "full"]
+    # revise:         edit the itinerary already on state (only valid when
+    #                 state.itinerary is not None; classifier sees this context)
+    route: Literal["conversational", "direct", "full", "revise"]
     target_agents: list[AgentName] = []
     extracted_slots: dict[str, str] = {}
     missing_required_slots: list[str] = []
     confidence: float = 0.0
     rationale: str | None = None
+    # answer_mode is only meaningful when route == "direct":
+    #  - "list"   → user wants recommendations/options → bullet response
+    #    ("best biryani in Kannur", "5-star hotels in Kyoto")
+    #  - "answer" → user is asking a specific fact about a named place →
+    #    single-sentence factual answer synthesized from the top hit
+    #    ("what time does Omar's Inn open", "phone number for X")
+    answer_mode: Literal["list", "answer"] = "list"
 
 
 # Required-slot sets per agent — used by the direct flow's slot gate (§3.4).
@@ -236,12 +255,15 @@ class PlanningState(BaseModel):
     user_profile: UserProfile | None = None
     trip_request: TripRequest | None = None
 
-    # Agent outputs — Annotated reducers let the four parallel dispatch nodes
-    # in the LangGraph travel graph merge into the same state without racing.
-    route_options: Annotated[list[RouteOption], operator.add] = []
-    hotel_options: Annotated[list[HotelOption], operator.add] = []
-    restaurant_options: Annotated[list[RestaurantOption], operator.add] = []
-    event_options: Annotated[list[EventOption], operator.add] = []
+    # Agent outputs — each field is written by exactly one subgraph (hotel_sub
+    # → hotel_options, etc.), so parallel writes never collide on the same
+    # channel and no reducer is needed. Plain assignment lets a fresh turn
+    # cleanly overwrite the previous turn's list (checkpointer persists them
+    # across turns; we want overwrite, not concatenation).
+    route_options: list[RouteOption] = []
+    hotel_options: list[HotelOption] = []
+    restaurant_options: list[RestaurantOption] = []
+    event_options: list[EventOption] = []
 
     # Itinerary (current state)
     itinerary: Itinerary | None = None
@@ -261,6 +283,7 @@ class PlanningState(BaseModel):
     history: list[dict] = []
     response_message: str = ""
     followup_question: str | None = None
+    missing_slots: list[str] = []
     error_notes: list[str] = []
     repair_attempts: int = 0
 
@@ -279,21 +302,28 @@ class PlanningState(BaseModel):
 
 
 class PlanRequest(BaseModel):
-    """Top-level request that enters the Travel Orchestrator."""
+    """Top-level request that enters the Travel Orchestrator.
+
+    `session_id` binds the request to a LangGraph checkpointer thread so
+    subsequent turns resume mid-graph (at wait_for_next_message) instead
+    of restarting from START. Frontend generates and reuses a UUID.
+    """
 
     message: str
+    session_id: str
     user_profile: UserProfile | None = None
     trip_request: TripRequest | None = None
     history: list[dict] = []
 
 
 class PlanResponse(BaseModel):
-    route: Literal["conversational", "direct", "full"]
+    route: Literal["conversational", "direct", "full", "revise"]
     intent: IntentClassification
     itinerary: Itinerary | None = None
     direct_result: list[dict] | None = None
     followup_question: str | None = None
     message: str = ""
+    session_id: str = ""
 
 
 # --------------------------------------------------------------------------- #

@@ -8,11 +8,9 @@ have a proper provider (flights, live availability, etc.).
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import uuid
-from datetime import date, datetime, timedelta, time
-from typing import Any
+from datetime import datetime, timedelta, time
 
 logger = logging.getLogger("sub_agents")
 
@@ -109,12 +107,21 @@ async def run_hotel_agent(
     trip: TripRequest,
     prefs: UserPreferences | None = None,
     limit: int = 8,
+    place_name: str | None = None,
 ) -> list[HotelOption]:
-    """Return ranked hotel options for the destination + dates."""
+    """Return ranked hotel options for the destination + dates.
+
+    When `place_name` is provided (answer-mode name lookup), it is used as
+    the search query so Google returns the specific place instead of a
+    generic category list.
+    """
     nights = max(trip.num_days - 1, 1)
-    interests = ["hotels"]
-    if prefs and prefs.preferred_hotel_rating:
+    if place_name:
+        interests = [place_name]
+    elif prefs and prefs.preferred_hotel_rating:
         interests = [f"{prefs.preferred_hotel_rating} star hotels"]
+    else:
+        interests = ["hotels"]
 
     raw = await fetch_places(trip.destination, interests)
     hotels: list[HotelOption] = []
@@ -136,6 +143,8 @@ async def run_hotel_agent(
                 score=float(r.get("rating") or 0.0),
                 address=r.get("address", ""),
                 amenities=[],
+                phone=r.get("phone"),
+                website=r.get("website"),
             )
         )
     # Rank by star match first, then rating.
@@ -158,8 +167,12 @@ async def run_restaurant_agent(
     trip: TripRequest,
     prefs: UserPreferences | None = None,
     limit: int = 12,
+    place_name: str | None = None,
 ) -> list[RestaurantOption]:
-    interests = list((prefs.preferred_foods if prefs else []) or []) + ["restaurants"]
+    if place_name:
+        interests = [place_name]
+    else:
+        interests = list((prefs.preferred_foods if prefs else []) or []) + ["restaurants"]
     raw = await fetch_places(trip.destination, interests[:3])
     restaurants: list[RestaurantOption] = []
     for r in raw[:limit]:
@@ -177,6 +190,9 @@ async def run_restaurant_agent(
                 avg_cost_per_person=_price_from_level(r.get("price_level"), default=25.0),
                 rating=float(r.get("rating") or 0.0),
                 opening_hours=_parse_opening_hours(r.get("weekday_hours", [])),
+                address=r.get("address", ""),
+                phone=r.get("phone"),
+                website=r.get("website"),
             )
         )
     restaurants.sort(key=lambda x: -x.rating)
@@ -192,10 +208,14 @@ async def run_event_agent(
     trip: TripRequest,
     prefs: UserPreferences | None = None,
     limit: int = 16,
+    place_name: str | None = None,
 ) -> list[EventOption]:
-    interests = list((prefs.activity_interests if prefs else []) or [])
-    if not interests:
-        interests = ["top attractions", "museums", "landmarks"]
+    if place_name:
+        interests = [place_name]
+    else:
+        interests = list((prefs.activity_interests if prefs else []) or [])
+        if not interests:
+            interests = ["top attractions", "museums", "landmarks"]
     raw = await fetch_places(trip.destination, interests[:4])
     events: list[EventOption] = []
     for r in raw[:limit]:
@@ -214,6 +234,9 @@ async def run_event_agent(
                 typical_hours=None,
                 best_time_of_day="flexible",
                 closed_days=[],
+                address=r.get("address", ""),
+                phone=r.get("phone"),
+                website=r.get("website"),
             )
         )
     events.sort(key=lambda e: -(float(getattr(e, "cost", 0)) == 0.0) or 0.0)
@@ -301,35 +324,3 @@ async def run_route_agent(
     return [flight, train]
 
 
-# --------------------------------------------------------------------------- #
-# Parallel dispatch
-# --------------------------------------------------------------------------- #
-
-
-AGENT_RUNNERS = {
-    "route": run_route_agent,
-    "hotel": run_hotel_agent,
-    "restaurant": run_restaurant_agent,
-    "event": run_event_agent,
-}
-
-
-async def dispatch_agents(
-    target_agents: list[str],
-    trip: TripRequest,
-    prefs: UserPreferences | None = None,
-) -> dict[str, Any]:
-    """Fan out the selected sub-agents concurrently and return their outputs."""
-    logger.info("dispatch_agents: agents=%s destination=%r",
-                target_agents, trip.destination)
-    coros = [AGENT_RUNNERS[a](trip, prefs) for a in target_agents]
-    results = await asyncio.gather(*coros, return_exceptions=True)
-    out: dict[str, Any] = {}
-    for name, res in zip(target_agents, results):
-        if isinstance(res, Exception):
-            logger.warning("agent %s raised: %s", name, res)
-            out[name] = []
-        else:
-            logger.info("agent %s → %d options", name, len(res))
-            out[name] = res
-    return out

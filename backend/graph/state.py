@@ -5,9 +5,9 @@ The graph-only fields (`incoming_message`, `response_message`,
 `draft_itinerary`, `conflict_notes`, `error_notes`, `changes_summary`)
 live on the shared `PlanningState` so that the FastAPI adapters in
 `travel_orchestrator.py` and the graph nodes work off the same schema.
-The four `*_options` lists on `PlanningState` are annotated with an
-`operator.add` reducer so the four parallel dispatch nodes can each
-return a slice of state without racing.
+Each `*_options` list is written by exactly one subgraph (hotel_sub →
+hotel_options, etc.), so no reducer is needed — plain assignment
+overwrites on each turn.
 """
 
 from agent_models import PlanningState

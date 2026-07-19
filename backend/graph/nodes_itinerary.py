@@ -26,8 +26,6 @@ from itinerary_agent import (
     load_agent_data,
     resolve_conflicts,
 )
-from sub_agents import dispatch_agents
-
 logger = logging.getLogger("graph.itinerary")
 
 
@@ -223,59 +221,6 @@ def assemble_revision_node(state: PlanningState) -> dict:
         "changes_summary": summary,
         "response_message": summary,
         "phase": "review",
-    }
-
-
-# --------------------------------------------------------------------------- #
-# Revision-graph prelude — refetch agents when the client didn't cache them
-# --------------------------------------------------------------------------- #
-
-
-async def ensure_agent_data_node(state: PlanningState) -> dict:
-    """The revise endpoint accepts optional cached option lists. If any of the
-    critical ones are missing we refetch, then merge the client-provided
-    hotel_options back in (mirrors the previous revise() behaviour)."""
-    needs_refetch = not (
-        state.route_options and state.hotel_options and state.event_options
-    )
-    if not needs_refetch:
-        return {}
-
-    prefs = state.user_profile.preferences if state.user_profile else None
-    outputs = await dispatch_agents(
-        ["route", "hotel", "restaurant", "event"],
-        state.trip_request,
-        prefs,
-    )
-
-    # Merge client-cached hotels back in so a revision that references a
-    # previously-shown hotel still resolves.
-    fresh_hotels = outputs.get("hotel", [])
-    seen = {h.hotel_id for h in fresh_hotels}
-    for h in state.hotel_options:
-        if h.hotel_id not in seen:
-            fresh_hotels.append(h)
-
-    logger.info(
-        "ensure_agent_data → refetched (route=%d hotel=%d rest=%d event=%d)",
-        len(outputs.get("route", [])), len(fresh_hotels),
-        len(outputs.get("restaurant", [])), len(outputs.get("event", [])),
-    )
-
-    # We want to REPLACE the lists here, not append via reducer. LangGraph's
-    # `operator.add` reducer would concatenate — so return the fresh lists
-    # already merged with the cached ones. Because the incoming state.*_options
-    # values are also in the reduction, this would double-count. Instead, we
-    # emit the DIFF: only what's not already there.
-    def diff(new: list, existing: list, key: str) -> list:
-        seen_ids = {getattr(x, key) for x in existing}
-        return [x for x in new if getattr(x, key) not in seen_ids]
-
-    return {
-        "route_options": diff(outputs.get("route", []), state.route_options, "route_id"),
-        "hotel_options": diff(fresh_hotels, state.hotel_options, "hotel_id"),
-        "restaurant_options": diff(outputs.get("restaurant", []), state.restaurant_options, "restaurant_id"),
-        "event_options": diff(outputs.get("event", []), state.event_options, "event_id"),
     }
 
 

@@ -1,18 +1,39 @@
-"""Top-level travel StateGraph — implements the dual-path flow diagrammed
-in itenary_agent.md §1.
+"""Top-level travel StateGraph — v4 topology with session loop-back
++ shared planning lane + LLM slot-question node
+(see itinerary_langgraph_flow.md).
 
-  classify_intent
-    ├── conversational ──► answer_conversational ──► END
-    └── planning (direct | full)
-          └► hydrate_trip ──► check_slot_gate
-                ├── ask ────────────────────────────► END
-                └── go  ──► [hotel ∥ restaurant ∥ route ∥ event]
-                              (self-gated by intent.target_agents)
-                              └──► post_dispatch
-                                     ├── direct ──► merge_direct ──► END
-                                     └── full   ──► itinerary_planning
-                                                        (compiled subgraph)
-                                                                    └──► END
+  START ──► intent_decision  ◄──────────────────────────────┐
+                │                                            │
+      _route_after_intent  (τ + revise guard)                │
+   ┌────────────┬────────────┬────────────┐                  │
+   ▼            ▼            ▼            ▼                  │
+conv         revise      planning                            │
+   │            │            │                               │
+   ▼            ▼            ▼                               │
+answer_    revise       hydrate_trip                         │
+conv       (subgraph)       │                                │
+   │            │            ▼                               │
+   │            │      check_slot_gate                       │
+   │            │            │                               │
+   │            │   _slot_gate_route                         │
+   │            │    ┌────┬──┴────────┬────────────┐         │
+   │            │    ▼    ▼           ▼            ▼         │
+   │            │  ask_  hotel_sub /   [4 subgraphs]         │
+   │            │  missing_ …          in parallel           │
+   │            │  slots (DIRECT one)  (FULL)                │
+   │            │    │            │       │                  │
+   │            │    │            └───┬───┘                  │
+   │            │    │                ▼                      │
+   │            │    │          post_dispatch                │
+   │            │    │       direct│full                     │
+   │            │    │           │   │                       │
+   │            │    │           ▼   ▼                       │
+   │            │    │  merge_direct itinerary_planning      │
+   │            │    │           │   │                       │
+   └────────────┴────┴───────────┴───┴─────┐                 │
+                                           ▼                 │
+                                 wait_for_next_message ──────┘
+                                     (interrupt)
 """
 
 from __future__ import annotations
@@ -20,14 +41,7 @@ from __future__ import annotations
 from langgraph.graph import END, START, StateGraph
 
 from agent_models import PlanningState
-from graph.nodes_dispatch import (
-    dispatch_event,
-    dispatch_hotel,
-    dispatch_restaurant,
-    dispatch_route,
-    merge_direct,
-    post_dispatch,
-)
+from graph.nodes_dispatch import answer_from_places, merge_direct, post_dispatch
 from graph.nodes_itinerary import (
     allocate_budget_node,
     assemble_itinerary_node,
@@ -40,16 +54,24 @@ from graph.nodes_itinerary import (
 )
 from graph.nodes_router import (
     answer_conversational,
+    ask_missing_slots,
     check_slot_gate,
-    classify_intent,
     hydrate_trip,
+    intent_decision,
+    route_after_intent,
+)
+from graph.revise_graph import build_revise_graph
+from graph.session import CHECKPOINTER, wait_for_next_message
+from graph.subgraphs import (
+    event_sub_node,
+    hotel_sub_node,
+    restaurant_sub_node,
+    route_sub_node,
 )
 
 
 # --------------------------------------------------------------------------- #
-# Itinerary sub-graph — the §4 Planning Engine (Load → Budget → Schedule →
-# Conflict → Repair? → Assemble). Compiled and embedded as a single node in
-# the top-level graph.
+# Itinerary sub-graph — Load → Budget → Schedule → Conflict → Repair? → Assemble.
 # --------------------------------------------------------------------------- #
 
 
@@ -83,80 +105,138 @@ def _build_itinerary_subgraph():
 
 
 # --------------------------------------------------------------------------- #
+# Edge functions
+# --------------------------------------------------------------------------- #
+
+
+_AGENT_TO_SUBGRAPH = {
+    "hotel": "hotel_sub",
+    "restaurant": "restaurant_sub",
+    "route": "route_sub",
+    "event": "event_sub",
+}
+
+_ALL_SUBGRAPHS = ["hotel_sub", "restaurant_sub", "route_sub", "event_sub"]
+
+
+def _slot_gate_route(state: PlanningState):
+    """Decide what happens after check_slot_gate wrote `missing_slots`.
+
+    - Missing anything → ask_missing_slots (LLM phrases the question).
+    - DIRECT + complete → single subgraph named by intent.target_agents[0].
+    - FULL + complete → fan out to all four subgraphs.
+    """
+    if state.missing_slots:
+        return "ask_missing_slots"
+
+    intent = state.intent
+    if intent is None or not intent.target_agents:
+        # Defensive: nothing to dispatch, drop into ask so the user can help.
+        return "ask_missing_slots"
+
+    if intent.route == "direct":
+        return _AGENT_TO_SUBGRAPH[intent.target_agents[0]]
+    return _ALL_SUBGRAPHS
+
+
+def _route_after_dispatch(state: PlanningState) -> str:
+    """After post_dispatch fan-in:
+
+    - DIRECT + answer_mode='answer' → answer_from_places (LLM synthesises
+      a one-sentence factual answer about the top hit).
+    - DIRECT + answer_mode='list'   → merge_direct (bullet list).
+    - FULL                           → itinerary_planning.
+    """
+    intent = state.intent
+    if intent and intent.route == "direct":
+        return "answer" if intent.answer_mode == "answer" else "list"
+    return "full"
+
+
+# --------------------------------------------------------------------------- #
 # Top-level travel graph
 # --------------------------------------------------------------------------- #
 
 
-def _route_after_classify(state: PlanningState) -> str:
-    intent = state.intent
-    if intent is None or intent.route == "conversational":
-        return "conversational"
-    return "planning"
-
-
-def _route_after_slot_gate(state: PlanningState):
-    if state.followup_question:
-        return END
-    return [
-        "dispatch_hotel",
-        "dispatch_restaurant",
-        "dispatch_route",
-        "dispatch_event",
-    ]
-
-
-def _route_after_dispatch(state: PlanningState) -> str:
-    intent = state.intent
-    return "direct" if (intent and intent.route == "direct") else "full"
-
-
 def build_travel_graph():
-    """Compile and return the top-level travel StateGraph."""
-    subgraph = _build_itinerary_subgraph()
+    """Compile and return the top-level travel StateGraph.
+
+    Compiled with the process-wide MemorySaver checkpointer so state
+    persists across turns per thread_id (session). Terminal branches
+    edge into `wait_for_next_message` (which calls interrupt()) and the
+    resume edge goes back to `intent_decision`.
+    """
+    itinerary_subgraph = _build_itinerary_subgraph()
+    revise_subgraph = build_revise_graph()
 
     g = StateGraph(PlanningState)
 
-    g.add_node("classify_intent", classify_intent)
+    # Router + intake
+    g.add_node("intent_decision", intent_decision)
     g.add_node("answer_conversational", answer_conversational)
     g.add_node("hydrate_trip", hydrate_trip)
     g.add_node("check_slot_gate", check_slot_gate)
-    g.add_node("dispatch_hotel", dispatch_hotel)
-    g.add_node("dispatch_restaurant", dispatch_restaurant)
-    g.add_node("dispatch_route", dispatch_route)
-    g.add_node("dispatch_event", dispatch_event)
+    g.add_node("ask_missing_slots", ask_missing_slots)
+
+    # Per-agent subgraphs — shared by DIRECT (one) and FULL (all four).
+    # Wrapped so each returns only its own *_options field; otherwise
+    # parallel subgraph invocation would merge full state back and cause
+    # concurrent writes on shared PlanningState channels.
+    g.add_node("hotel_sub", hotel_sub_node)
+    g.add_node("restaurant_sub", restaurant_sub_node)
+    g.add_node("route_sub", route_sub_node)
+    g.add_node("event_sub", event_sub_node)
+
+    # Fan-in + downstream
     g.add_node("post_dispatch", post_dispatch)
     g.add_node("merge_direct", merge_direct)
-    g.add_node("itinerary_planning", subgraph)
+    g.add_node("answer_from_places", answer_from_places)
+    g.add_node("itinerary_planning", itinerary_subgraph)
+    g.add_node("revise", revise_subgraph)
 
-    g.add_edge(START, "classify_intent")
+    # Loop-back node — interrupts and awaits the next user message
+    g.add_node("wait_for_next_message", wait_for_next_message)
+
+    # START → intent_decision → { conversational | planning | revise }
+    g.add_edge(START, "intent_decision")
     g.add_conditional_edges(
-        "classify_intent",
-        _route_after_classify,
+        "intent_decision",
+        route_after_intent,
         {
             "conversational": "answer_conversational",
             "planning": "hydrate_trip",
+            "revise": "revise",
         },
     )
-    g.add_edge("answer_conversational", END)
 
+    # Planning lane (shared by DIRECT and FULL)
     g.add_edge("hydrate_trip", "check_slot_gate")
-    g.add_conditional_edges("check_slot_gate", _route_after_slot_gate)
+    g.add_conditional_edges("check_slot_gate", _slot_gate_route)
 
-    # Fan-in: all four dispatch nodes converge on post_dispatch.
-    for name in (
-        "dispatch_hotel",
-        "dispatch_restaurant",
-        "dispatch_route",
-        "dispatch_event",
-    ):
+    # Fan-in: every subgraph edges into post_dispatch
+    for name in _ALL_SUBGRAPHS:
         g.add_edge(name, "post_dispatch")
 
     g.add_conditional_edges(
         "post_dispatch",
         _route_after_dispatch,
-        {"direct": "merge_direct", "full": "itinerary_planning"},
+        {
+            "list": "merge_direct",
+            "answer": "answer_from_places",
+            "full": "itinerary_planning",
+        },
     )
-    g.add_edge("merge_direct", END)
-    g.add_edge("itinerary_planning", END)
 
-    return g.compile()
+    # All terminal branches → wait_for_next_message → back to intent_decision
+    for terminal in (
+        "answer_conversational",
+        "ask_missing_slots",
+        "merge_direct",
+        "answer_from_places",
+        "itinerary_planning",
+        "revise",
+    ):
+        g.add_edge(terminal, "wait_for_next_message")
+    g.add_edge("wait_for_next_message", "intent_decision")
+
+    return g.compile(checkpointer=CHECKPOINTER)

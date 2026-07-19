@@ -14,6 +14,8 @@ _FIELD_MASK = ",".join([
     "places.editorialSummary",
     "places.regularOpeningHours",
     "places.priceLevel",
+    "places.nationalPhoneNumber",
+    "places.websiteUri",
 ])
 
 
@@ -63,6 +65,8 @@ def _normalise(raw: dict[str, Any]) -> dict[str, Any]:
         "open_now": hours.get("openNow"),
         "weekday_hours": hours.get("weekdayDescriptions", []),
         "price_level": raw.get("priceLevel"),
+        "phone": raw.get("nationalPhoneNumber"),
+        "website": raw.get("websiteUri"),
     }
 
 
