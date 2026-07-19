@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
-import type { Message, ChatRequest, ChatResponse } from './types'
+import type { Message, PlanRequest, PlanResponse } from './types'
+import { formatPlanResponse } from './utils/format'
 import ChatMessage from './components/ChatMessage'
 import InputForm from './components/InputForm'
 import './App.css'
@@ -8,6 +9,9 @@ export default function App() {
   const [messages, setMessages] = useState<Message[]>([])
   const [isLoading, setIsLoading] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
+  // One session_id per browser tab — reused across turns so the backend
+  // resumes the LangGraph checkpointer instead of restarting from START.
+  const sessionIdRef = useRef<string>(crypto.randomUUID())
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -25,10 +29,14 @@ export default function App() {
       .filter((m) => !m.isLoading && !m.errorText && m.text)
       .map((m) => ({ role: m.role, content: m.text! }))
 
-    const req: ChatRequest = { message: text, history }
+    const req: PlanRequest = {
+      message: text,
+      session_id: sessionIdRef.current,
+      history,
+    }
 
     try {
-      const res = await fetch('/chat', {
+      const res = await fetch('/plan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(req),
@@ -39,12 +47,13 @@ export default function App() {
         throw new Error(`${res.status}: ${errText}`)
       }
 
-      const data: ChatResponse = await res.json()
+      const data: PlanResponse = await res.json()
+      const rendered = formatPlanResponse(data)
 
       setMessages((prev) =>
         prev.map((m) =>
           m.id === loadingMsg.id
-            ? { ...m, isLoading: false, text: data.text, itinerary: data.itinerary }
+            ? { ...m, isLoading: false, text: rendered }
             : m,
         ),
       )
