@@ -326,30 +326,3 @@ class PlanResponse(BaseModel):
     session_id: str = ""
 
 
-# --------------------------------------------------------------------------- #
-# Revision loop (§4 Step 6)
-# --------------------------------------------------------------------------- #
-
-
-class ReviseRequest(BaseModel):
-    """Round-trip revision — client sends back the current itinerary + feedback.
-
-    Optional cached agent-option lists let the client avoid re-hitting the
-    sub-agents; if omitted, the orchestrator refetches them from trip_request.
-    """
-
-    itinerary: Itinerary
-    feedback: str
-    trip_request: TripRequest
-    user_profile: UserProfile | None = None
-    route_options: list[RouteOption] = []
-    hotel_options: list[HotelOption] = []
-    restaurant_options: list[RestaurantOption] = []
-    event_options: list[EventOption] = []
-
-
-class ReviseResponse(BaseModel):
-    itinerary: Itinerary
-    changes_summary: str = ""
-    conflicts_remaining: list[str] = []
-    message: str = ""

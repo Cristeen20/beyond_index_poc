@@ -18,8 +18,8 @@ for _name in (
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
-from agent_models import PlanRequest, PlanResponse, ReviseRequest, ReviseResponse
-from travel_orchestrator import plan as plan_handler, revise as revise_handler
+from agent_models import PlanRequest, PlanResponse
+from travel_orchestrator import plan as plan_handler
 
 
 app = FastAPI(title="Trip Itinerary Generator", version="0.1.0")
@@ -45,19 +45,6 @@ async def plan_endpoint(req: PlanRequest) -> PlanResponse:
     context. See itinerary_langgraph_flow.md."""
     try:
         return await plan_handler(req)
-    except KeyError as exc:
-        raise HTTPException(status_code=500, detail=f"Missing env var: {exc}") from exc
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
-
-
-@app.post("/revise", response_model=ReviseResponse)
-async def revise_endpoint(req: ReviseRequest) -> ReviseResponse:
-    """Standalone revision subgraph — for callers that already have an
-    explicit ReviseRequest (frontend's approve/revise UI). Not
-    session-checkpointed; the request payload carries everything."""
-    try:
-        return await revise_handler(req)
     except KeyError as exc:
         raise HTTPException(status_code=500, detail=f"Missing env var: {exc}") from exc
     except Exception as exc:

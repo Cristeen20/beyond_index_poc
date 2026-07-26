@@ -7,10 +7,9 @@ cover the whole surface:
 
 1. **Travel graph** (`graph/travel_graph.py`) — session-checkpointed
    dual-path flow with loop-back. Handles all `/plan` traffic.
-2. **Revise graph** (`graph/revise_graph.py`) — the revision subgraph.
-   Used two ways: embedded as a node inside the travel graph (for
-   `route=revise` classifications) and invoked standalone from the
-   `/revise` endpoint (for the explicit approve/revise UI).
+2. **Revise graph** (`graph/revise_graph.py`) — the revision subgraph,
+   embedded as a node inside the travel graph and triggered when the
+   router classifies the turn as `route=revise`.
 
 Both graphs share `PlanningState` (`agent_models.PlanningState`). Each
 `*_options` list is written by exactly one subgraph (`hotel_sub` →
@@ -239,17 +238,10 @@ assemble_itinerary  allocate_budget
               repair_planner ────────┘
 ```
 
-Used two ways:
-
-- **Embedded in the travel graph** as the `revise` node. Triggered when
-  `intent.route == "revise"`. Reads `state.itinerary`,
-  `state.revision_feedback` (set by classifier or prompt), and the
-  cached option lists on state.
-
-- **Standalone from `/revise`.** `travel_orchestrator.revise()` builds
-  a `PlanningState` from the `ReviseRequest` payload and calls
-  `_REVISE_GRAPH.ainvoke(initial)` directly. Not session-checkpointed —
-  the request payload carries everything.
+Embedded in the travel graph as the `revise` node. Triggered when
+`intent.route == "revise"`. Reads `state.itinerary`,
+`state.revision_feedback` (set by classifier or prompt), and the
+cached option lists on state.
 
 ---
 
@@ -278,15 +270,12 @@ worth calling out:
 
 - `plan(req)` — checkpointed. First call for `req.session_id` runs from
   START; subsequent calls resume via `Command(resume=req.message)`.
-- `revise(req)` — thin standalone wrapper over the revise subgraph, for
-  the explicit `/revise` endpoint. Not session-checkpointed.
+  Revisions are handled internally via the `revise` node inside the
+  travel graph — no separate wrapper.
 
 `main.py`:
 
 - `POST /plan` — `PlanRequest{message, session_id, ...}` → `PlanResponse`.
-- `POST /revise` — unchanged. Wraps the same revise subgraph.
-- `POST /chat` — legacy shim; auto-generates `session_id` if absent and
-  returns it in `ChatResponse` so the frontend can reuse it.
 
 ---
 

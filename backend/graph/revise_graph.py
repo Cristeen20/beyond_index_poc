@@ -2,7 +2,7 @@
 
   START ──► _fanout_refetch(state)
               │  (for each *_options list that arrived empty on the
-              │   ReviseRequest, add the matching subgraph to the fanout;
+              │   incoming state, add the matching subgraph to the fanout;
               │   if all four are cached, jump straight to allocate_budget)
               │
       ┌───────┴───────┬────────────┬─────────────┐

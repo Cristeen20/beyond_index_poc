@@ -11,6 +11,8 @@ can inspect it.
 
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 from datetime import date, timedelta
 
@@ -18,16 +20,48 @@ import openai
 
 from agent_models import IntentClassification, PlanningState, TripRequest
 from intake_router import CONFIDENCE_TAU, classify, slot_gate
+from places import resolve_venue
 
 logger = logging.getLogger("graph.router")
 
 
 _CONVERSATIONAL_SYSTEM = (
-    "You are a friendly, knowledgeable travel assistant. The user's message has "
-    "been classified as conversational — answer from your own knowledge, no "
-    "tools or live data. Keep replies natural, concise, and practical. For "
-    "questions about specific hotels/restaurants/flights/attractions, remind "
-    "the user you can search for those if they'd like."
+    "You are a travel agent. Your job is to help users decide where to visit, "
+    "answer questions about destinations and venues, and help them build "
+    "itineraries. Stay in that role — if a message is off-topic, redirect "
+    "politely back to travel planning.\n\n"
+    "REPLY LENGTH: at most 2 sentences. Be direct and information-dense. No "
+    "throat-clearing, no filler, no sign-offs like 'hope this helps'. If the "
+    "user asks a question, answer it — don't restate it.\n\n"
+    "SPECIFIC NAMED VENUES: if the user names a specific real-world venue "
+    "(hotel, restaurant, cafe, shop, attraction, etc.), you will usually be "
+    "given a GROUND TRUTH block below listing what Google Places says about "
+    "each. Use ONLY that ground truth for facts about the venue (its category, "
+    "address, rating, hours). NEVER infer the category from words in the name — "
+    "tokens like 'Inn', 'Cafe', 'Palace', 'Lodge', 'House', 'Club', 'Garden', "
+    "'Villa', 'Resort' inside a name mean NOTHING about what the venue actually "
+    "is. If GROUND TRUTH says a venue was not found, say so in one sentence and "
+    "ask for a clarifying detail (city, neighbourhood, alternate spelling). "
+    "If no GROUND TRUTH block is present, no specific venue was detected — "
+    "answer generically."
+)
+
+
+_VENUE_EXTRACT_SYSTEM = (
+    "You extract Google Places search queries from a user's chat message.\n\n"
+    "If the message names one or more specific real-world venues (a proper-noun "
+    "hotel, restaurant, cafe, shop, attraction, etc.), return a search query "
+    "for each — combining the venue name with any location context in the "
+    "message (city, neighbourhood, region). If no specific venue is named "
+    "(e.g. only generic requests like 'best restaurants in Paris'), return an "
+    "empty list.\n\n"
+    "Return JSON of the form {\"queries\": [\"Venue Name, City\", ...]}.\n\n"
+    "Examples:\n"
+    "- 'best time to visit Omars Inn Kannur' → {\"queries\": [\"Omars Inn Kannur\"]}\n"
+    "- 'compare Taj Mahal Palace Mumbai with ITC Grand Chola Chennai' → "
+    "{\"queries\": [\"Taj Mahal Palace Mumbai\", \"ITC Grand Chola Chennai\"]}\n"
+    "- 'best cafes in Paris' → {\"queries\": []}\n"
+    "- 'hi how are you' → {\"queries\": []}"
 )
 
 
@@ -115,8 +149,13 @@ def route_after_intent(state: PlanningState) -> str:
 
 
 async def answer_conversational(state: PlanningState) -> dict:
-    """LLM-only reply — no agents dispatched."""
-    messages: list[dict] = [{"role": "system", "content": _CONVERSATIONAL_SYSTEM}]
+    """LLM reply grounded by Google Places for any named venues in the message."""
+    ground_truth = await _lookup_named_venues(state.incoming_message)
+    system_prompt = _CONVERSATIONAL_SYSTEM
+    if ground_truth:
+        system_prompt += "\n\nGROUND TRUTH — venues resolved via Google Places:\n" + ground_truth
+
+    messages: list[dict] = [{"role": "system", "content": system_prompt}]
     for m in state.history or []:
         role = m.get("role") if isinstance(m, dict) else m.role
         content = m.get("content") if isinstance(m, dict) else m.content
@@ -125,12 +164,74 @@ async def answer_conversational(state: PlanningState) -> dict:
 
     resp = await _get_llm().chat.completions.create(
         model="gpt-4o",
-        max_tokens=800,
+        max_tokens=200,
         messages=messages,
     )
     text = resp.choices[0].message.content or ""
-    logger.info("answer_conversational → %d chars", len(text))
+    logger.info("answer_conversational → %d chars (venues=%d)",
+                len(text), ground_truth.count("\n") + (1 if ground_truth else 0))
     return {"response_message": text, "phase": "direct_answer"}
+
+
+async def _extract_venue_queries(message: str) -> list[str]:
+    """Ask a mini LLM to pull out proper-noun venues (with location context)."""
+    try:
+        resp = await _get_llm().chat.completions.create(
+            model="gpt-4o-mini",
+            max_tokens=200,
+            response_format={"type": "json_object"},
+            messages=[
+                {"role": "system", "content": _VENUE_EXTRACT_SYSTEM},
+                {"role": "user", "content": message},
+            ],
+        )
+        data = json.loads(resp.choices[0].message.content or "{}")
+    except (json.JSONDecodeError, openai.OpenAIError) as exc:
+        logger.warning("venue extractor failed: %s", exc)
+        return []
+    raw = data.get("queries", [])
+    return [q.strip() for q in raw if isinstance(q, str) and q.strip()][:3]
+
+
+async def _lookup_named_venues(message: str) -> str:
+    """Extract venues from the message and resolve each via Google Places.
+
+    Returns a rendered ground-truth block ready to append to the system
+    prompt, or an empty string if nothing was detected / resolved.
+    """
+    queries = await _extract_venue_queries(message)
+    if not queries:
+        return ""
+    results = await asyncio.gather(
+        *(resolve_venue(q) for q in queries), return_exceptions=True
+    )
+    lines: list[str] = []
+    for query, r in zip(queries, results):
+        if isinstance(r, Exception):
+            logger.warning("resolve_venue(%r) errored: %s", query, r)
+            lines.append(f"- '{query}': lookup failed.")
+            continue
+        if r is None:
+            lines.append(f"- '{query}': not found on Google Places.")
+            continue
+        types = ", ".join(r.get("types", [])) or "unknown category"
+        parts = [f"'{r['name']}' — types: [{types}] — {r['address']}"]
+        if r.get("rating") is not None:
+            parts.append(f"rating {r['rating']}")
+        if r.get("price_level"):
+            parts.append(f"price {r['price_level']}")
+        if r.get("open_now") is not None:
+            parts.append("open now" if r["open_now"] else "closed now")
+        if r.get("weekday_hours"):
+            parts.append("hours: " + " | ".join(r["weekday_hours"]))
+        if r.get("phone"):
+            parts.append(f"phone {r['phone']}")
+        if r.get("website"):
+            parts.append(f"website {r['website']}")
+        if r.get("summary"):
+            parts.append(r["summary"])
+        lines.append("- " + " — ".join(parts))
+    return "\n".join(lines)
 
 
 def _parse_date(raw: str | None) -> date | None:

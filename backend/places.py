@@ -19,6 +19,30 @@ _FIELD_MASK = ",".join([
 ])
 
 
+async def resolve_venue(query: str) -> dict[str, Any] | None:
+    """Look up a single named venue via Places Text Search.
+
+    Returns the top-ranked normalised place dict (with `types`, `address`,
+    `summary`, etc.) or None if Places returns no hits. Used by the
+    conversational branch to ground answers about specific venues in real
+    data instead of letting the LLM guess from name tokens.
+    """
+    api_key = os.environ["GOOGLE_MAPS_API_KEY"]
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        resp = await client.post(
+            PLACES_URL,
+            headers={
+                "X-Goog-Api-Key": api_key,
+                "X-Goog-FieldMask": _FIELD_MASK,
+                "Content-Type": "application/json",
+            },
+            json={"textQuery": query, "maxResultCount": 1},
+        )
+        resp.raise_for_status()
+        places = resp.json().get("places", [])
+    return _normalise(places[0]) if places else None
+
+
 async def fetch_places(destination: str, interests: list[str]) -> list[dict[str, Any]]:
     api_key = os.environ["GOOGLE_MAPS_API_KEY"]
 
