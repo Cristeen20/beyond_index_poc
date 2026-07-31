@@ -247,11 +247,21 @@ def _hydrate_trip_request(
     intent: IntentClassification,
     explicit: TripRequest | None,
 ) -> TripRequest | None:
-    """Prefer explicitly-provided TripRequest; otherwise build from slots."""
-    if explicit is not None:
-        return explicit
+    """Prefer explicitly-provided TripRequest; otherwise build from slots.
 
+    Exception: if the classifier extracted a destination that differs from
+    the persisted trip's, treat this as a new trip and rebuild from slots
+    so a stale trip_request can't shadow the user's new intent.
+    """
     slots = intent.extracted_slots
+    slot_dest = (slots.get("destination") or "").strip().lower()
+    if explicit is not None:
+        explicit_dest = (explicit.destination or "").strip().lower()
+        if slot_dest and slot_dest != explicit_dest:
+            explicit = None  # fall through to build fresh from slots
+        else:
+            return explicit
+
     destination = slots.get("destination")
     if not destination:
         return None
@@ -281,9 +291,46 @@ def _hydrate_trip_request(
 
 def hydrate_trip(state: PlanningState) -> dict:
     """Build a TripRequest from the classifier's extracted slots (or pass an
-    explicit one straight through)."""
+    explicit one straight through).
+
+    When we detect a new-trip switch (destination changed vs. the persisted
+    trip), wipe stale per-agent options, itinerary, and scratchpad so the
+    downstream sub-graphs rebuild from a clean slate instead of reusing the
+    prior turn's data.
+    """
     trip = _hydrate_trip_request(state.intent, state.trip_request)
-    return {"trip_request": trip} if trip else {}
+    if trip is None:
+        return {}
+    updates: dict = {"trip_request": trip}
+    prior = state.trip_request
+    if prior is not None and (
+        (trip.destination or "").strip().lower()
+        != (prior.destination or "").strip().lower()
+    ):
+        logger.info(
+            "hydrate_trip: destination changed %r → %r, clearing stale state",
+            prior.destination, trip.destination,
+        )
+        updates.update({
+            "itinerary": None,
+            "route_options": [],
+            "hotel_options": [],
+            "restaurant_options": [],
+            "event_options": [],
+            "direct_result": None,
+            "chosen_route": None,
+            "budget": None,
+            "draft_itinerary": None,
+            "conflict_notes": [],
+            "changes_summary": "",
+            "agent_outputs_received": {},
+            "error_notes": [],
+            "repair_attempts": 0,
+            "missing_slots": [],
+            "followup_question": None,
+            "revision_feedback": None,
+        })
+    return updates
 
 
 def check_slot_gate(state: PlanningState) -> dict:
