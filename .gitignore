@@ -24,3 +24,5 @@ frontend/.vite/
 # IDE
 .vscode/
 .idea/
+
+.commandcode/
