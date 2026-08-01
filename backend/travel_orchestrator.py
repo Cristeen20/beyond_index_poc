@@ -52,8 +52,20 @@ async def plan(req: PlanRequest) -> PlanResponse:
     if is_resume:
         logger.info("plan: resuming session=%s (paused at %s)",
                     req.session_id, snapshot.next)
+        # If the frontend sent an option_action (button/select on an
+        # OptionsCard), forward it in the resume payload alongside the
+        # message. wait_for_next_message unpacks the dict and stashes
+        # option_action on state so the pre-planning parsers see it.
+        resume_payload: dict | str
+        if req.option_action is not None:
+            resume_payload = {
+                "message": req.message,
+                "option_action": req.option_action.model_dump(mode="json"),
+            }
+        else:
+            resume_payload = req.message
         final_dict = await _TRAVEL_GRAPH.ainvoke(
-            Command(resume=req.message), config=config
+            Command(resume=resume_payload), config=config
         )
     else:
         initial = PlanningState(
@@ -71,6 +83,19 @@ async def plan(req: PlanRequest) -> PlanResponse:
 def _state_to_plan_response(state: PlanningState, session_id: str) -> PlanResponse:
     intent = state.intent or IntentClassification(route="conversational", confidence=0.0)
     route = intent.route
+
+    # Pre-planning payload takes precedence — it's the current UI surface
+    # regardless of route. The response_message is the payload's title /
+    # explanatory blurb (or an LLM answer to a question about shown items).
+    if state.options_payload is not None:
+        return PlanResponse(
+            route=route,
+            intent=intent,
+            options_payload=state.options_payload,
+            itinerary=state.itinerary,
+            message=state.response_message,
+            session_id=session_id,
+        )
 
     if route == "conversational":
         return PlanResponse(

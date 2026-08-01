@@ -40,20 +40,28 @@ def wait_for_next_message(state: PlanningState) -> dict:
     to `intent_decision`.
     """
     logger.info("wait_for_next_message → pausing, awaiting next turn")
-    next_message = interrupt("awaiting_next_message")
+    resume_payload = interrupt("awaiting_next_message")
     logger.info(
-        "wait_for_next_message → resumed with message=%r", next_message
+        "wait_for_next_message → resumed with payload=%r", resume_payload
     )
+    # Resume payload is either a plain string (free-text reply) or a dict
+    # like {"message": "...", "option_action": {...}} sent by the
+    # orchestrator when the frontend used a button/select on an OptionsCard.
+    if isinstance(resume_payload, dict):
+        next_message = resume_payload.get("message") or ""
+        option_action = resume_payload.get("option_action")
+    else:
+        next_message = resume_payload or ""
+        option_action = None
+
     # Reset per-turn OUTPUT scratch. We deliberately preserve `intent`,
-    # `missing_slots`, and `followup_question` so `intent_decision` can
-    # see whether we paused mid-collection last turn and either MERGE the
-    # follow-up into the pending intent or reclassify fresh. Downstream
-    # `check_slot_gate` overwrites `missing_slots` every turn (and clears
-    # `followup_question` on the dispatch path), so stale pending state
-    # gets wiped the moment we successfully dispatch — option B in the
-    # design doc.
+    # `missing_slots`, `followup_question`, `pending_stage`, and
+    # `options_payload` so the pre-planning router can see whether we
+    # paused mid-stage and route accordingly. Each parse node clears the
+    # options_payload / pending_stage once it consumes them.
     return {
-        "incoming_message": next_message or "",
+        "incoming_message": next_message,
+        "option_action": option_action,
         "response_message": "",
         "direct_result": None,
         "error_notes": [],

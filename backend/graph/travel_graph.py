@@ -1,39 +1,48 @@
-"""Top-level travel StateGraph — v4 topology with session loop-back
-+ shared planning lane + LLM slot-question node
-(see itinerary_langgraph_flow.md).
+"""Top-level travel StateGraph — v5 topology.
 
-  START ──► intent_decision  ◄──────────────────────────────┐
-                │                                            │
-      _route_after_intent  (τ + revise guard)                │
-   ┌────────────┬────────────┬────────────┐                  │
-   ▼            ▼            ▼            ▼                  │
-conv         revise      planning                            │
-   │            │            │                               │
-   ▼            ▼            ▼                               │
-answer_    revise       hydrate_trip                         │
-conv       (subgraph)       │                                │
-   │            │            ▼                               │
-   │            │      check_slot_gate                       │
-   │            │            │                               │
-   │            │   _slot_gate_route                         │
-   │            │    ┌────┬──┴────────┬────────────┐         │
-   │            │    ▼    ▼           ▼            ▼         │
-   │            │  ask_  hotel_sub /   [4 subgraphs]         │
-   │            │  missing_ …          in parallel           │
-   │            │  slots (DIRECT one)  (FULL)                │
-   │            │    │            │       │                  │
-   │            │    │            └───┬───┘                  │
-   │            │    │                ▼                      │
-   │            │    │          post_dispatch                │
-   │            │    │       direct│full                     │
-   │            │    │           │   │                       │
-   │            │    │           ▼   ▼                       │
-   │            │    │  merge_direct itinerary_planning      │
-   │            │    │           │   │                       │
-   └────────────┴────┴───────────┴───┴─────┐                 │
-                                           ▼                 │
-                                 wait_for_next_message ──────┘
-                                     (interrupt)
+Adds the pre-planning chain (features/pre_planning.md) for the FULL
+route, replacing the old four-subgraph fan-out. DIRECT still fans out
+to a single subgraph → post_dispatch → merge_direct / answer_from_places.
+
+  START ──► intent_decision  ◄────────────────────────────────────┐
+                │                                                  │
+      _route_after_intent  (τ + revise guard)                      │
+   ┌────────────┬────────────┬────────────┐                        │
+   ▼            ▼            ▼                                     │
+ conv        revise      planning                                  │
+   │            │            │                                     │
+   ▼            ▼            ▼                                     │
+ answer_    revise       hydrate_trip                              │
+ conv       (sub)         │                                        │
+   │            │         ▼                                        │
+   │            │   check_slot_gate                                │
+   │            │         │                                        │
+   │            │   _slot_gate_route                               │
+   │            │   ┌──────┼───────┬──────────────────┐            │
+   │            │   ▼      ▼       ▼                  ▼            │
+   │            │  ask_   hotel_sub / …         confirm_basics     │
+   │            │  missing_ (DIRECT one)          (FULL entry)     │
+   │            │  slots      │                       │            │
+   │            │             ▼                       │            │
+   │            │        post_dispatch                │            │
+   │            │        ┌───┴───┐                    │            │
+   │            │        ▼       ▼                    │            │
+   │            │   merge_    answer_                 ▼            │
+   │            │   direct    from_places   [pre-planning chain]   │
+   │            │        │       │                    │            │
+   │            │        │       │      elicit_scope→propose_places│
+   │            │        │       │      →propose_stays→ask_day_by_ │
+   │            │        │       │      day→fill_missing_agents→   │
+   │            │        │       │      itinerary_planning         │
+   │            │        │       │                    │            │
+   └────────────┴────────┴───────┴────────────────────┴────────────┤
+                                                                   ▼
+                                                       wait_for_next_message
+                                                          (interrupt)
+                                                                   │
+                                                     route_after_wait
+                                                     ├─ pending_stage → parse_*
+                                                     └─ else          → intent_decision
 """
 
 from __future__ import annotations
@@ -51,6 +60,25 @@ from graph.nodes_itinerary import (
     load_data_router,
     repair_planner_node,
     run_llm_planner_node,
+)
+from graph.nodes_preplanning import (
+    ask_day_by_day_node,
+    confirm_basics_node,
+    elicit_scope_node,
+    fill_missing_agents_node,
+    parse_confirm_node,
+    parse_daybyday_node,
+    parse_places_reply_node,
+    parse_scope_node,
+    parse_stays_reply_node,
+    propose_places_node,
+    propose_stays_for_selection_node,
+    route_after_parse_confirm,
+    route_after_parse_daybyday,
+    route_after_parse_places,
+    route_after_parse_scope,
+    route_after_parse_stays,
+    route_after_wait,
 )
 from graph.nodes_router import (
     answer_conversational,
@@ -124,7 +152,9 @@ def _slot_gate_route(state: PlanningState):
 
     - Missing anything → ask_missing_slots (LLM phrases the question).
     - DIRECT + complete → single subgraph named by intent.target_agents[0].
-    - FULL + complete → fan out to all four subgraphs.
+    - FULL + complete → enter the pre-planning chain (confirm_basics →
+      elicit_scope → propose_places → …). Skip confirm_basics if the user
+      already confirmed for this trip in an earlier turn.
     """
     if state.missing_slots:
         return "ask_missing_slots"
@@ -136,7 +166,8 @@ def _slot_gate_route(state: PlanningState):
 
     if intent.route == "direct":
         return _AGENT_TO_SUBGRAPH[intent.target_agents[0]]
-    return _ALL_SUBGRAPHS
+    # FULL → pre-planning.
+    return "elicit_scope" if state.basics_confirmed else "confirm_basics"
 
 
 def _route_after_dispatch(state: PlanningState) -> str:
@@ -194,6 +225,20 @@ def build_travel_graph():
     g.add_node("itinerary_planning", itinerary_subgraph)
     g.add_node("revise", revise_subgraph)
 
+    # Pre-planning nodes (features/pre_planning.md) — the FULL route flows
+    # through these instead of the parallel four-subgraph fan-out.
+    g.add_node("confirm_basics", confirm_basics_node)
+    g.add_node("parse_confirm", parse_confirm_node)
+    g.add_node("elicit_scope", elicit_scope_node)
+    g.add_node("parse_scope", parse_scope_node)
+    g.add_node("propose_places", propose_places_node)
+    g.add_node("parse_places_reply", parse_places_reply_node)
+    g.add_node("propose_stays_for_selection", propose_stays_for_selection_node)
+    g.add_node("parse_stays_reply", parse_stays_reply_node)
+    g.add_node("ask_day_by_day", ask_day_by_day_node)
+    g.add_node("parse_daybyday", parse_daybyday_node)
+    g.add_node("fill_missing_agents", fill_missing_agents_node)
+
     # Loop-back node — interrupts and awaits the next user message
     g.add_node("wait_for_next_message", wait_for_next_message)
 
@@ -227,7 +272,62 @@ def build_travel_graph():
         },
     )
 
-    # All terminal branches → wait_for_next_message → back to intent_decision
+    # ── Pre-planning chain (FULL route) ──────────────────────────────────
+    # confirm_basics → wait → parse_confirm → elicit_scope (or hydrate_trip)
+    g.add_edge("confirm_basics", "wait_for_next_message")
+    g.add_conditional_edges(
+        "parse_confirm",
+        route_after_parse_confirm,
+        {"elicit_scope": "elicit_scope", "hydrate_trip": "hydrate_trip"},
+    )
+    # elicit_scope → wait → parse_scope → propose_places
+    g.add_edge("elicit_scope", "wait_for_next_message")
+    g.add_conditional_edges(
+        "parse_scope",
+        route_after_parse_scope,
+        {"propose_places": "propose_places"},
+    )
+    # propose_places → wait → parse_places_reply → {wait|propose_places|
+    # propose_stays_for_selection}
+    g.add_edge("propose_places", "wait_for_next_message")
+    g.add_conditional_edges(
+        "parse_places_reply",
+        route_after_parse_places,
+        {
+            "wait_for_next_message": "wait_for_next_message",
+            "propose_places": "propose_places",
+            "propose_stays_for_selection": "propose_stays_for_selection",
+        },
+    )
+    # propose_stays_for_selection → wait → parse_stays_reply → {wait|
+    # propose_stays_for_selection|ask_day_by_day|fill_missing_agents}
+    g.add_edge("propose_stays_for_selection", "wait_for_next_message")
+    g.add_conditional_edges(
+        "parse_stays_reply",
+        route_after_parse_stays,
+        {
+            "wait_for_next_message": "wait_for_next_message",
+            "propose_stays_for_selection": "propose_stays_for_selection",
+            "ask_day_by_day": "ask_day_by_day",
+            "fill_missing_agents": "fill_missing_agents",
+        },
+    )
+    # ask_day_by_day → wait → parse_daybyday → {wait|fill_missing_agents}
+    g.add_edge("ask_day_by_day", "wait_for_next_message")
+    g.add_conditional_edges(
+        "parse_daybyday",
+        route_after_parse_daybyday,
+        {
+            "wait_for_next_message": "wait_for_next_message",
+            "fill_missing_agents": "fill_missing_agents",
+        },
+    )
+    # fill_missing_agents → itinerary_planning (existing subgraph, unchanged)
+    g.add_edge("fill_missing_agents", "itinerary_planning")
+
+    # All terminal branches → wait_for_next_message. On resume, the
+    # route_after_wait edge fn checks pending_stage: pre-planning parsers
+    # if a card was up, otherwise intent_decision.
     for terminal in (
         "answer_conversational",
         "ask_missing_slots",
@@ -237,6 +337,17 @@ def build_travel_graph():
         "revise",
     ):
         g.add_edge(terminal, "wait_for_next_message")
-    g.add_edge("wait_for_next_message", "intent_decision")
+    g.add_conditional_edges(
+        "wait_for_next_message",
+        route_after_wait,
+        {
+            "intent_decision": "intent_decision",
+            "parse_confirm": "parse_confirm",
+            "parse_scope": "parse_scope",
+            "parse_places_reply": "parse_places_reply",
+            "parse_stays_reply": "parse_stays_reply",
+            "parse_daybyday": "parse_daybyday",
+        },
+    )
 
     return g.compile(checkpointer=CHECKPOINTER)

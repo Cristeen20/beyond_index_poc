@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import type { Message, PlanRequest, PlanResponse } from './types'
+import type { Message, OptionAction, PlanRequest, PlanResponse } from './types'
 import { formatPlanResponse } from './utils/format'
 import ChatMessage from './components/ChatMessage'
 import InputForm from './components/InputForm'
@@ -17,22 +17,36 @@ export default function App() {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
-  async function handleSubmit(text: string) {
-    const userMsg: Message = { id: crypto.randomUUID(), role: 'user', text }
+  async function sendTurn(text: string, optionAction?: OptionAction) {
+    // For structured option_action turns with no accompanying text, show a
+    // short synthetic user bubble so the conversation reads naturally.
+    // These are flagged synthetic=true so they're excluded from the
+    // classifier's history — otherwise "Chose: day_by_day" gets treated as
+    // real user speech on a subsequent classification.
+    const isSynthetic = !text && !!optionAction
+    const userText = text || (optionAction ? summarizeAction(optionAction) : '')
+    const userMsg: Message = {
+      id: crypto.randomUUID(),
+      role: 'user',
+      text: userText,
+      synthetic: isSynthetic,
+    }
     const loadingMsg: Message = { id: crypto.randomUUID(), role: 'assistant', isLoading: true }
 
     setMessages((prev) => [...prev, userMsg, loadingMsg])
     setIsLoading(true)
 
-    // Build history from settled messages (no loading or error entries)
+    // Build history from settled, real messages only. Loading, errors, and
+    // synthetic button-summary bubbles are excluded.
     const history = messages
-      .filter((m) => !m.isLoading && !m.errorText && m.text)
+      .filter((m) => !m.isLoading && !m.errorText && !m.synthetic && m.text)
       .map((m) => ({ role: m.role, content: m.text! }))
 
     const req: PlanRequest = {
       message: text,
       session_id: sessionIdRef.current,
       history,
+      ...(optionAction ? { option_action: optionAction } : {}),
     }
 
     try {
@@ -53,7 +67,12 @@ export default function App() {
       setMessages((prev) =>
         prev.map((m) =>
           m.id === loadingMsg.id
-            ? { ...m, isLoading: false, text: rendered }
+            ? {
+                ...m,
+                isLoading: false,
+                text: rendered,
+                optionsPayload: data.options_payload ?? undefined,
+              }
             : m,
         ),
       )
@@ -68,6 +87,20 @@ export default function App() {
       setIsLoading(false)
     }
   }
+
+  function handleSubmit(text: string) {
+    sendTurn(text)
+  }
+
+  function handleOptionAction(action: OptionAction) {
+    sendTurn(action.text || '', action)
+  }
+
+  // Only the most recent assistant message with an options_payload is
+  // interactive — earlier cards are frozen history.
+  const lastInteractiveId = [...messages]
+    .reverse()
+    .find((m) => m.role === 'assistant' && m.optionsPayload && !m.isLoading)?.id
 
   return (
     <div className="app">
@@ -86,7 +119,12 @@ export default function App() {
           </div>
         )}
         {messages.map((msg) => (
-          <ChatMessage key={msg.id} message={msg} />
+          <ChatMessage
+            key={msg.id}
+            message={msg}
+            onOptionAction={msg.id === lastInteractiveId ? handleOptionAction : undefined}
+            optionActionDisabled={isLoading}
+          />
         ))}
         <div ref={bottomRef} />
       </main>
@@ -96,4 +134,21 @@ export default function App() {
       </footer>
     </div>
   )
+}
+
+function summarizeAction(action: OptionAction): string {
+  switch (action.action) {
+    case 'select':
+      return `Selected ${action.ids?.length ?? 0} option(s)`
+    case 'more':
+      return 'More options'
+    case 'confirm':
+      return action.ids?.[0] ? `Chose: ${action.ids[0]}` : 'Confirmed'
+    case 'correct':
+      return action.text || 'Change'
+    case 'question':
+      return action.text || 'Question'
+    default:
+      return ''
+  }
 }

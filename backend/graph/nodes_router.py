@@ -359,8 +359,12 @@ def check_slot_gate(state: PlanningState) -> dict:
             intent.target_agents, intent.extracted_slots
         )
     else:
-        # FULL with a fully-hydrated trip — nothing to ask.
-        missing = []
+        # FULL — hydrate_trip fills defaults for anything the user didn't
+        # specify (e.g. dates default to today+30 → today+32). Those
+        # defaults must NOT silently reach confirm_basics; ask for real
+        # values first. Gate on what the classifier actually extracted,
+        # not on trip_request presence.
+        missing = slot_gate(intent.target_agents, intent.extracted_slots)
 
     logger.info("check_slot_gate → missing=%s", missing)
     if missing:

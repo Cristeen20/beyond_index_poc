@@ -43,10 +43,43 @@ export interface IntentClassification {
 // model_dump). Rendered via formatPlanResponse in utils/format.ts.
 export type DirectResultItem = Record<string, unknown> & { agent?: string; name?: string }
 
+export interface OptionAction {
+  action: 'select' | 'more' | 'question' | 'confirm' | 'correct'
+  ids?: string[]
+  text?: string
+}
+
 export interface PlanRequest {
   message: string
   session_id: string
   history?: HistoryItem[]
+  option_action?: OptionAction
+}
+
+// Structured selection card (features/pre_planning.md). When present the
+// UI renders it instead of the plain assistant bubble.
+export interface OptionsPayloadItem {
+  id: string
+  name: string
+  rank: number
+  rationale: string
+  meta?: Record<string, unknown>
+}
+
+export interface OptionsPayloadAction {
+  id: string
+  label: string
+}
+
+export interface OptionsPayload {
+  kind: 'confirm_basics' | 'scope' | 'places' | 'stays' | 'day_by_day'
+  title: string
+  description?: string
+  items: OptionsPayloadItem[]
+  actions: OptionsPayloadAction[]
+  select: 'single' | 'multi' | 'none'
+  page: number
+  has_more: boolean
 }
 
 export interface PlanResponse {
@@ -55,6 +88,7 @@ export interface PlanResponse {
   itinerary?: unknown | null
   direct_result?: DirectResultItem[] | null
   followup_question?: string | null
+  options_payload?: OptionsPayload | null
   message: string
   session_id: string
 }
@@ -66,6 +100,11 @@ export interface Message {
   role: 'user' | 'assistant'
   text?: string
   itinerary?: Itinerary
+  optionsPayload?: OptionsPayload
   errorText?: string
   isLoading?: boolean
+  // Synthetic UI-only bubbles (e.g. "Chose: day_by_day" summarising a
+  // button click). Excluded from `history` sent on subsequent requests so
+  // they don't pollute the classifier's view of the conversation.
+  synthetic?: boolean
 }

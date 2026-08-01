@@ -247,7 +247,23 @@ Phase = Literal[
     "approved",
     "booked",
     "direct_answer",
+    "pre_planning",
 ]
+
+
+# Pre-planning stages — which node produced the current options_payload, so
+# the router knows where to resume when the next turn arrives. See
+# features/pre_planning.md.
+PreStage = Literal[
+    "confirm_basics",
+    "scope",
+    "places",
+    "stays",
+    "day_by_day",
+]
+
+
+PlanningScope = Literal["places_only", "places_and_stays", "day_by_day"]
 
 
 class PlanningState(BaseModel):
@@ -295,10 +311,39 @@ class PlanningState(BaseModel):
     conflict_notes: list[str] = []
     changes_summary: str = ""
 
+    # Pre-planning fields (features/pre_planning.md). Populated by the
+    # confirm_basics → elicit_scope → propose_places → propose_stays chain
+    # that now stands between check_slot_gate and itinerary_planning on the
+    # FULL route.
+    planning_scope: PlanningScope | None = None
+    basics_confirmed: bool = False
+    options_payload: dict | None = None
+    selected_place_ids: list[str] = []
+    selected_stay_ids: list[str] = []
+    options_page: int = 0
+    pending_stage: PreStage | None = None
+    # Free-text buffer for structured option actions (select/more/question)
+    # arriving via option_action on PlanRequest. Cleared each turn.
+    option_action: dict | None = None
+
 
 # --------------------------------------------------------------------------- #
 # API request/response wrappers
 # --------------------------------------------------------------------------- #
+
+
+class OptionAction(BaseModel):
+    """Structured reply to a pending options_payload (buttons / select).
+
+    Sent by the frontend when the user interacts with an OptionsCard
+    instead of typing free text. When present, the pre-planning router
+    bypasses LLM classification and jumps straight to the parser for the
+    currently-pending stage.
+    """
+
+    action: Literal["select", "more", "question", "confirm", "correct"]
+    ids: list[str] = []
+    text: str | None = None
 
 
 class PlanRequest(BaseModel):
@@ -314,6 +359,7 @@ class PlanRequest(BaseModel):
     user_profile: UserProfile | None = None
     trip_request: TripRequest | None = None
     history: list[dict] = []
+    option_action: OptionAction | None = None
 
 
 class PlanResponse(BaseModel):
@@ -322,6 +368,7 @@ class PlanResponse(BaseModel):
     itinerary: Itinerary | None = None
     direct_result: list[dict] | None = None
     followup_question: str | None = None
+    options_payload: dict | None = None
     message: str = ""
     session_id: str = ""
 

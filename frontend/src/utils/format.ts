@@ -83,6 +83,15 @@ function formatItinerary(it: RawItinerary): string {
 }
 
 export function formatPlanResponse(r: PlanResponse): string {
+  // Pre-planning options card carries its own title / rationales — the
+  // OptionsCard component handles rendering. Prefer a distinct
+  // response_message (e.g. an LLM-answered question) over the title. Fall
+  // back to the title so history isn't jagged (ChatMessage suppresses the
+  // duplicate bubble when the text equals the card title).
+  if (r.options_payload) {
+    if (r.message && r.message !== r.options_payload.title) return r.message
+    return r.options_payload.title || ''
+  }
   if (r.followup_question) return r.followup_question
   if (r.route === 'conversational') return r.message
   if (r.route === 'direct') {
