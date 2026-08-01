@@ -31,6 +31,25 @@ logger = logging.getLogger("intake_router")
 CONFIDENCE_TAU = 0.55
 
 
+# Backstop for a specific classifier failure: "traveling from X to Y" without
+# any transport-mode word tends to get labelled DIRECT+[route] (pattern-match
+# on the "trains from Rome to Florence" example), producing a bare transport
+# dump instead of a trip plan. If the raw output is DIRECT+[route] alone and
+# the message names no transport mode, escalate to FULL.
+_TRANSPORT_MODE_WORDS = (
+    "flight", "flights", "fly", "flying",
+    "train", "trains", "rail",
+    "bus", "buses", "coach",
+    "drive", "driving", "car", "road trip",
+    "ferry", "boat",
+)
+
+
+def _mentions_transport_mode(message: str) -> bool:
+    lower = message.lower()
+    return any(w in lower for w in _TRANSPORT_MODE_WORDS)
+
+
 _ROUTER_TOOL = {
     "type": "function",
     "function": {
@@ -54,7 +73,11 @@ _ROUTER_TOOL = {
                         "cultural/etiquette info, currency, greetings, follow-ups that "
                         "don't need live data. NO agents dispatched.\n"
                         "'direct' for a narrow query targeting specific agent capabilities "
-                        "(hotels, restaurants, routes, events) with enough entities to act.\n"
+                        "(hotels, restaurants, routes, events) with enough entities to act. "
+                        "For the `route` agent specifically, the message MUST name a "
+                        "transport mode (flight/train/bus/drive/ferry) or ask a route-fact "
+                        "question (fastest way, cheapest fare, schedule). Bare 'from X to Y' "
+                        "framing is a trip request → FULL, not a DIRECT route lookup.\n"
                         "'full' for a trip/plan request, vague query, or day-by-day schedule.\n"
                         "'revise' ONLY when the SESSION CONTEXT shows an existing itinerary "
                         "AND the user is asking to change/edit/replace parts of it "
@@ -115,7 +138,12 @@ _ROUTER_SYSTEM = (
     "   - greetings, chit-chat, meta-questions ('what can you do?')\n"
     "   - follow-up clarifications the LLM can answer without fresh data\n"
     "   Examples: 'best time to visit Japan', 'do I need a visa for Kenya', "
-    "   'what's the tipping etiquette in Paris', 'hi'.\n\n"
+    "   'what's the tipping etiquette in Paris', 'hi'.\n"
+    "   NOT conversational: any 'plan a trip', 'give me an itinerary', "
+    "   'suggest a X-day trip', 'make me a weekend in Y' framing — even when "
+    "   the destination is vague or missing. Those are FULL; the FULL route "
+    "   asks for the missing basics via slot-fill. Do NOT answer such "
+    "   requests with a generic Day 1 / Day 2 template.\n\n"
     "2) DIRECT — a narrow query that needs live Google-backed data for a subset "
     "   of these capabilities:\n"
     "   - hotel: find/recommend hotels\n"
@@ -126,7 +154,10 @@ _ROUTER_SYSTEM = (
     "   Tokyo', 'trains from Rome to Florence on Friday'.\n\n"
     "3) FULL — a full day-by-day itinerary planned by the Itinerary Agent. "
     "   Use when the request spans the whole trip, is vague ('plan a trip'), "
-    "   or explicitly asks for a day-by-day schedule.\n\n"
+    "   or explicitly asks for a day-by-day schedule. This is also the right "
+    "   route when the user asks for a trip/itinerary WITHOUT naming a "
+    "   destination — the FULL flow will ask for destination/dates/origin "
+    "   as a slot-fill before proposing anything.\n\n"
     "4) REVISE — edit an existing itinerary. ONLY valid when the SESSION "
     "   CONTEXT below shows an itinerary is already on state AND the user is "
     "   asking to change, swap, add, remove, or adjust part of it.\n"
@@ -136,6 +167,16 @@ _ROUTER_SYSTEM = (
     "Rules of thumb:\n"
     "- If the question is answerable from general knowledge and does NOT "
     "  require finding specific places/times/prices, choose CONVERSATIONAL.\n"
+    "- Trip-planning verbs — 'plan', 'itinerary', 'X-day trip', 'suggest a "
+    "  trip', 'give me a plan' — are ALWAYS FULL, even when the destination "
+    "  is vague or missing. Never answer these with a generic template; the "
+    "  FULL route asks for destination/dates/origin first.\n"
+    "- 'Traveling from X to Y', 'trip from X to Y', 'planning a trip to Y' "
+    "  with NO transport-mode word (flight/train/bus/drive/ferry) and NO "
+    "  route-fact ask (fastest, cheapest, schedule) is a FULL trip request, "
+    "  NOT a DIRECT route lookup. Reserve DIRECT+route for explicit "
+    "  transport queries like 'trains from Rome to Florence' or 'cheapest "
+    "  flight NYC to LA on Friday'.\n"
     "- If the user names or implies a NEW place they want us to find, choose "
     "  DIRECT or FULL — even if a prior itinerary exists, a genuinely new "
     "  topic (different destination, greeting, unrelated question) is NOT a "
@@ -339,10 +380,77 @@ async def classify(
     if route == "full" and not target_agents:
         target_agents = ["route", "hotel", "restaurant", "event"]
 
+    # Route-only DIRECT with no transport-mode word → FULL. See
+    # _mentions_transport_mode above for the rationale. Runs before the
+    # hard-merge override so a bad first-turn classification doesn't
+    # persist as prior_intent into subsequent turns.
+    if (
+        route == "direct"
+        and target_agents == ["route"]
+        and not _mentions_transport_mode(message)
+    ):
+        logger.info(
+            "route-only DIRECT with no transport-mode word in %r — escalating to FULL",
+            message,
+        )
+        route = "full"
+        target_agents = ["route", "hotel", "restaurant", "event"]
+        downgraded = True
+
     if route in ("conversational", "revise"):
         target_agents = []  # neither path dispatches sub-agents at the top level
 
-    missing = slot_gate(target_agents, extracted) if route == "direct" else []
+    # Hard MERGE override — if the previous turn asked a follow-up
+    # question (`pending_question` is set), the current turn's message is
+    # almost certainly the answer to that question. The LLM's soft MERGE
+    # prompt is guidance only; observed failure mode is "aug 17" →
+    # DIRECT+route (transport dump) instead of merging into the pending
+    # FULL+dates intent.
+    #
+    # Trigger purely on `pending_question`, not on prior_intent's
+    # missing_required_slots — the latter is empty in older classifier
+    # runs where FULL didn't compute it, and we still want the override.
+    #
+    # Skip the override only if the reply clearly names a NEW destination
+    # different from the pending trip (real topic reset) or the classifier
+    # confidently returned conversational (a legit escape hatch).
+    if prior_intent and pending_question and route != "conversational":
+        prior_dest = ""
+        if trip_request is not None:
+            prior_dest = (trip_request.destination or "").strip().lower()
+        new_dest = str(raw_extracted.get("destination", "")).strip().lower()
+        is_topic_reset = bool(new_dest) and bool(prior_dest) and new_dest != prior_dest
+        if not is_topic_reset:
+            merged_slots = {**prior_intent.extracted_slots, **extracted}
+            if (
+                route != prior_intent.route
+                or set(target_agents) != set(prior_intent.target_agents)
+            ):
+                logger.info(
+                    "hard-merge override: classifier said route=%s agents=%s but "
+                    "prior turn asked %r — merging into prior intent (route=%s "
+                    "agents=%s)",
+                    route, target_agents, pending_question,
+                    prior_intent.route, prior_intent.target_agents,
+                )
+                route = prior_intent.route
+                target_agents = list(prior_intent.target_agents) or [
+                    "route", "hotel", "restaurant", "event"
+                ]
+                confidence = max(confidence, 0.85)
+            extracted = merged_slots
+
+    # Compute missing slots for both DIRECT and FULL. FULL used to skip
+    # this — but the pending-turn MERGE prompt in _pending_turn_context_message
+    # only fires when prior_intent.missing_required_slots is non-empty.
+    # Without it, a FULL turn that paused on "what dates?" reclassifies the
+    # user's date reply from scratch (often as DIRECT+route → transport
+    # dump) instead of merging into the pending FULL intent.
+    missing = (
+        slot_gate(target_agents, extracted)
+        if route in ("direct", "full")
+        else []
+    )
 
     if downgraded:
         logger.info(
