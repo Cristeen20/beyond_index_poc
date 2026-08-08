@@ -92,7 +92,7 @@ from graph.nodes_router import (
     route_after_intent,
 )
 from graph.revise_graph import build_revise_graph
-from graph.session import CHECKPOINTER, wait_for_next_message
+from graph.session import get_checkpointer, wait_for_next_message
 from graph.subgraphs import (
     event_sub_node,
     hotel_sub_node,
@@ -374,4 +374,4 @@ def build_travel_graph():
         },
     )
 
-    return g.compile(checkpointer=CHECKPOINTER)
+    return g.compile(checkpointer=get_checkpointer())

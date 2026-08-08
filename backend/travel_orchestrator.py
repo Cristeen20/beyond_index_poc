@@ -28,10 +28,22 @@ from graph import build_travel_graph
 logger = logging.getLogger("travel_orchestrator")
 
 
-# Compile the graph once at import time — cheap, deterministic, avoids
-# rebuilding the topology on every request. Checkpointed so a session
-# (thread_id) persists across turns.
-_TRAVEL_GRAPH = build_travel_graph()
+# Compiled once per process — cheap, deterministic, avoids rebuilding the
+# topology on every request. Checkpointed so a session (thread_id) persists
+# across turns.
+#
+# Built on first use rather than at import: the Postgres checkpointer must
+# be constructed inside a running event loop (see graph/session.py). main.py's
+# lifespan calls init_checkpointer() first, so by the time a request lands
+# the checkpointer is already built and this only compiles the topology.
+_TRAVEL_GRAPH = None
+
+
+def _get_graph():
+    global _TRAVEL_GRAPH
+    if _TRAVEL_GRAPH is None:
+        _TRAVEL_GRAPH = build_travel_graph()
+    return _TRAVEL_GRAPH
 
 
 # --------------------------------------------------------------------------- #
@@ -45,8 +57,12 @@ async def plan(req: PlanRequest) -> PlanResponse:
     )
     config = {"configurable": {"thread_id": req.session_id}}
 
+    graph = _get_graph()
+
     # Is this a fresh session or a resume from wait_for_next_message?
-    snapshot = _TRAVEL_GRAPH.get_state(config)
+    # aget_state, not get_state: AsyncPostgresSaver implements only the
+    # async checkpointer methods and raises on the sync ones.
+    snapshot = await graph.aget_state(config)
     is_resume = bool(snapshot and snapshot.next)
 
     if is_resume:
@@ -64,7 +80,7 @@ async def plan(req: PlanRequest) -> PlanResponse:
             }
         else:
             resume_payload = req.message
-        final_dict = await _TRAVEL_GRAPH.ainvoke(
+        final_dict = await graph.ainvoke(
             Command(resume=resume_payload), config=config
         )
     else:
@@ -74,7 +90,7 @@ async def plan(req: PlanRequest) -> PlanResponse:
             incoming_message=req.message,
             history=list(req.history or []),
         )
-        final_dict = await _TRAVEL_GRAPH.ainvoke(initial, config=config)
+        final_dict = await graph.ainvoke(initial, config=config)
 
     final = PlanningState.model_validate(final_dict)
     return _state_to_plan_response(final, req.session_id)

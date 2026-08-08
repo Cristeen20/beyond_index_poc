@@ -15,14 +15,26 @@ for _name in (
 ):
     logging.getLogger(_name).setLevel(logging.INFO)
 
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from agent_models import PlanRequest, PlanResponse
+from graph import close_checkpointer, init_checkpointer
 from travel_orchestrator import plan as plan_handler
 
 
-app = FastAPI(title="Trip Itinerary Generator", version="0.1.0")
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    # Opens the Postgres pool and creates the checkpoint tables when
+    # DATABASE_URL is set; no-op for the local MemorySaver path.
+    await init_checkpointer()
+    yield
+    await close_checkpointer()
+
+
+app = FastAPI(title="Trip Itinerary Generator", version="0.1.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,

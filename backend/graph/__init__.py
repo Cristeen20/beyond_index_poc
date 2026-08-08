@@ -16,5 +16,11 @@ the nodes — they are inputs, not agents in the LLM sense.
 
 from graph.travel_graph import build_travel_graph
 from graph.revise_graph import build_revise_graph
+from graph.session import close_checkpointer, init_checkpointer
 
-__all__ = ["build_travel_graph", "build_revise_graph"]
+__all__ = [
+    "build_travel_graph",
+    "build_revise_graph",
+    "init_checkpointer",
+    "close_checkpointer",
+]
