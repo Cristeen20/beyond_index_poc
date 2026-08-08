@@ -43,8 +43,9 @@ export default function InputForm({ onSubmit, disabled }: Props) {
           type="submit"
           className="btn-send"
           disabled={!text.trim() || disabled}
+          aria-label="Send"
         >
-          Send ↗
+          ↑
         </button>
       </div>
     </form>

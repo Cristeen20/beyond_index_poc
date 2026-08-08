@@ -55,7 +55,12 @@ def allocate_budget_node(state: PlanningState) -> dict:
     trip = state.trip_request
     if trip is None:
         return {}
-    chosen = min(state.route_options, key=lambda r: r.total_cost)
+    # No route options means no journey (no origin) — allocate_budget
+    # already treats chosen_route=None as zero transport spend.
+    chosen = (
+        min(state.route_options, key=lambda r: r.total_cost)
+        if state.route_options else None
+    )
     style = (
         state.user_profile.preferences.travel_style
         if state.user_profile else "balanced"
@@ -63,7 +68,9 @@ def allocate_budget_node(state: PlanningState) -> dict:
     budget = allocate_budget(trip, style, chosen)
     logger.info(
         "allocate_budget → route=%s $%.0f | budget total=$%.0f accom=$%.0f",
-        chosen.mode, chosen.total_cost, budget.total, budget.accommodation,
+        chosen.mode if chosen else "none",
+        chosen.total_cost if chosen else 0.0,
+        budget.total, budget.accommodation,
     )
     return {"chosen_route": chosen, "budget": budget}
 

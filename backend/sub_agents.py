@@ -104,7 +104,7 @@ def _guess_cuisine(name: str, types: list[str]) -> str:
 
 
 async def run_hotel_agent(
-    trip: TripRequest,
+    trip: TripRequest | None,
     prefs: UserPreferences | None = None,
     limit: int = 8,
     place_name: str | None = None,
@@ -113,9 +113,12 @@ async def run_hotel_agent(
 
     When `place_name` is provided (answer-mode name lookup), it is used as
     the search query so Google returns the specific place instead of a
-    generic category list.
+    generic category list. `trip` may be None in exactly that case — asking
+    a fact about a named place needs no trip, so the slot gate lets it
+    through un-hydrated.
     """
-    nights = max(trip.num_days - 1, 1)
+    destination = trip.destination if trip else ""
+    nights = max((trip.num_days if trip else 1) - 1, 1)
     if place_name:
         interests = [place_name]
     elif prefs and prefs.preferred_hotel_rating:
@@ -123,7 +126,7 @@ async def run_hotel_agent(
     else:
         interests = ["hotels"]
 
-    raw = await fetch_places(trip.destination, interests)
+    raw = await fetch_places(destination, interests)
     hotels: list[HotelOption] = []
     for r in raw[:limit]:
         if r["lat"] is None or r["lng"] is None:
@@ -134,7 +137,7 @@ async def run_hotel_agent(
             HotelOption(
                 hotel_id=str(uuid.uuid4()),
                 name=r["name"],
-                location=trip.destination,
+                location=destination or r.get("address", ""),
                 latitude=float(r["lat"]),
                 longitude=float(r["lng"]),
                 star_rating=rating_star,
@@ -164,16 +167,18 @@ async def run_hotel_agent(
 
 
 async def run_restaurant_agent(
-    trip: TripRequest,
+    trip: TripRequest | None,
     prefs: UserPreferences | None = None,
     limit: int = 12,
     place_name: str | None = None,
 ) -> list[RestaurantOption]:
+    # `trip` may be None on the answer-mode path — see run_hotel_agent.
+    destination = trip.destination if trip else ""
     if place_name:
         interests = [place_name]
     else:
         interests = list((prefs.preferred_foods if prefs else []) or []) + ["restaurants"]
-    raw = await fetch_places(trip.destination, interests[:3])
+    raw = await fetch_places(destination, interests[:3])
     restaurants: list[RestaurantOption] = []
     for r in raw[:limit]:
         if r["lat"] is None or r["lng"] is None:
@@ -184,7 +189,7 @@ async def run_restaurant_agent(
                 name=r["name"],
                 cuisine=_guess_cuisine(r["name"], r.get("types", [])),
                 meal_type=_classify_meal_type(r.get("types", [])),
-                location=trip.destination,
+                location=destination or r.get("address", ""),
                 latitude=float(r["lat"]),
                 longitude=float(r["lng"]),
                 avg_cost_per_person=_price_from_level(r.get("price_level"), default=25.0),
@@ -205,18 +210,25 @@ async def run_restaurant_agent(
 
 
 async def run_event_agent(
-    trip: TripRequest,
+    trip: TripRequest | None,
     prefs: UserPreferences | None = None,
     limit: int = 16,
     place_name: str | None = None,
 ) -> list[EventOption]:
+    # `trip` may be None on the answer-mode path — see run_hotel_agent.
+    destination = trip.destination if trip else ""
     if place_name:
         interests = [place_name]
     else:
         interests = list((prefs.activity_interests if prefs else []) or [])
         if not interests:
             interests = ["top attractions", "museums", "landmarks"]
-    raw = await fetch_places(trip.destination, interests[:4])
+        # Places the user named explicitly go first — they must actually be
+        # fetched, otherwise "include Moonlight Beach" can't be honoured by
+        # a ranker that only sees generic attraction results.
+        if trip and trip.must_include:
+            interests = list(trip.must_include) + interests
+    raw = await fetch_places(destination, interests[:4])
     events: list[EventOption] = []
     for r in raw[:limit]:
         if r["lat"] is None or r["lng"] is None:
@@ -226,7 +238,7 @@ async def run_event_agent(
                 event_id=str(uuid.uuid4()),
                 name=r["name"],
                 type=_classify_event_type(r.get("types", [])),
-                location=trip.destination,
+                location=destination or r.get("address", ""),
                 latitude=float(r["lat"]),
                 longitude=float(r["lng"]),
                 duration_minutes=90,
@@ -249,7 +261,7 @@ async def run_event_agent(
 
 
 async def run_route_agent(
-    trip: TripRequest,
+    trip: TripRequest | None,
     prefs: UserPreferences | None = None,
 ) -> list[RouteOption]:
     """Deterministic mock route options.
@@ -257,10 +269,25 @@ async def run_route_agent(
     Real flight / rail search is out of scope for the POC. We synthesise
     two plausible options (flight + train) so the Itinerary Agent has
     something to plan around and the budget breakdown includes transport.
+
+    Returns [] when there's no origin — a local day trip has no journey,
+    and a synthetic "Unknown → Sudbury" flight would be both wrong and
+    expensive in the budget. Downstream treats an empty route list as
+    "no transport" rather than an error; see load_agent_data.
     """
-    dep = datetime.combine(trip.start_date, time(9, 0))
+    if trip is None or not trip.has_origin:
+        logger.info("run_route_agent → no origin, skipping transport")
+        return []
+
+    # Anchor synthetic mock departures to today when the user hasn't given
+    # dates — the route agent still needs something to slot into the
+    # planner's transport segments.
+    from datetime import date as _date
+    start_anchor = trip.start_date or _date.today()
+    end_anchor = trip.end_date or (start_anchor + timedelta(days=max(trip.num_days, 1) - 1))
+    dep = datetime.combine(start_anchor, time(9, 0))
     arr_flight = dep + timedelta(hours=4)
-    ret_dep = datetime.combine(trip.end_date, time(17, 0))
+    ret_dep = datetime.combine(end_anchor, time(17, 0))
     ret_arr = ret_dep + timedelta(hours=4)
 
     per_traveler_flight = 350.0

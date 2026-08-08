@@ -48,7 +48,10 @@ async def fetch_places(destination: str, interests: list[str]) -> list[dict[str,
 
     queries: list[str] = []
     for interest in interests[:4]:
-        queries.append(f"{interest} in {destination}")
+        # No destination — answer-mode name lookup ("Sakkara Sudbury"), where
+        # the interest IS the full query. Appending " in " would search for a
+        # place inside itself and return nothing.
+        queries.append(f"{interest} in {destination}" if destination else interest)
     if not queries:
         queries = [
             f"top tourist attractions in {destination}",

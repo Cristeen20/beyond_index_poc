@@ -105,8 +105,8 @@ export default function App() {
   return (
     <div className="app">
       <header className="app-header">
-        <span className="header-icon">✈</span>
-        <h1>Trip Planner</h1>
+        <span className="header-icon" aria-hidden>✈</span>
+        <h1>AI Trip Planner</h1>
         <span className="header-badge">POC</span>
       </header>
 
@@ -138,8 +138,16 @@ export default function App() {
 
 function summarizeAction(action: OptionAction): string {
   switch (action.action) {
-    case 'select':
-      return `Selected ${action.ids?.length ?? 0} option(s)`
+    case 'select': {
+      const ids = action.ids ?? []
+      // num_days sends a single numeric id; show it as "N day(s)" so the
+      // synthetic user bubble reads naturally.
+      if (ids.length === 1 && /^\d+$/.test(ids[0])) {
+        const n = parseInt(ids[0], 10)
+        return `${n} day${n === 1 ? '' : 's'}`
+      }
+      return `Selected ${ids.length} option(s)`
+    }
     case 'more':
       return 'More options'
     case 'confirm':

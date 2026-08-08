@@ -72,7 +72,7 @@ export interface OptionsPayloadAction {
 }
 
 export interface OptionsPayload {
-  kind: 'confirm_basics' | 'scope' | 'places' | 'stays' | 'day_by_day'
+  kind: 'confirm_basics' | 'num_days' | 'scope' | 'places' | 'stays' | 'day_by_day'
   title: string
   description?: string
   items: OptionsPayloadItem[]
@@ -80,6 +80,7 @@ export interface OptionsPayload {
   select: 'single' | 'multi' | 'none'
   page: number
   has_more: boolean
+  meta?: Record<string, unknown>
 }
 
 export interface PlanResponse {

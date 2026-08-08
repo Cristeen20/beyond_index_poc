@@ -14,8 +14,10 @@ interface Props {
 export default function OptionsCard({ payload, onAction, disabled }: Props) {
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [q, setQ] = useState('')
+  const [customDays, setCustomDays] = useState('')
 
   const isItemCard = payload.kind === 'places' || payload.kind === 'stays'
+  const isNumDaysCard = payload.kind === 'num_days'
 
   function toggle(id: string) {
     setSelected((prev) => {
@@ -42,10 +44,19 @@ export default function OptionsCard({ payload, onAction, disabled }: Props) {
     // are single-choice picks — the parser inspects ids[0] to know which
     // button was clicked. 'correct' on the confirm_basics card is its
     // own action so the parser can re-hydrate from the user's next
-    // free-text reply.
+    // free-text reply. For num_days, the id IS the number ("3") and
+    // the parser reads ids[0].
     if (id === 'more') return onAction({ action: 'more' })
     if (id === 'correct') return onAction({ action: 'correct', ids: [id] })
+    if (isNumDaysCard) return onAction({ action: 'select', ids: [id] })
     onAction({ action: 'confirm', ids: [id] })
+  }
+
+  function submitCustomDays() {
+    const n = parseInt(customDays.trim(), 10)
+    if (!Number.isFinite(n) || n < 1) return
+    onAction({ action: 'select', ids: [String(n)] })
+    setCustomDays('')
   }
 
   function submitQuestion() {
@@ -145,7 +156,7 @@ export default function OptionsCard({ payload, onAction, disabled }: Props) {
         </>
       )}
 
-      {!isItemCard && (
+      {!isItemCard && !isNumDaysCard && (
         <div className="options-actions options-actions-buttons">
           {payload.actions.map((a) => (
             <button
@@ -159,6 +170,45 @@ export default function OptionsCard({ payload, onAction, disabled }: Props) {
             </button>
           ))}
         </div>
+      )}
+
+      {isNumDaysCard && (
+        <>
+          <div className="options-actions options-actions-buttons">
+            {payload.actions.map((a) => (
+              <button
+                key={a.id}
+                type="button"
+                className="btn-primary"
+                onClick={() => submitAction(a.id)}
+                disabled={disabled}
+              >
+                {a.label}
+              </button>
+            ))}
+          </div>
+          <div className="options-question">
+            <input
+              type="number"
+              min={1}
+              placeholder="Or type a number of days…"
+              value={customDays}
+              onChange={(e) => setCustomDays(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') submitCustomDays()
+              }}
+              disabled={disabled}
+            />
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={submitCustomDays}
+              disabled={disabled || !customDays.trim()}
+            >
+              Use
+            </button>
+          </div>
+        </>
       )}
     </div>
   )

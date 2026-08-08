@@ -14,12 +14,23 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from datetime import date, timedelta
+from datetime import date
 
 import openai
 
-from agent_models import IntentClassification, PlanningState, TripRequest
-from intake_router import CONFIDENCE_TAU, classify, slot_gate
+from agent_models import (
+    UNKNOWN_ORIGIN,
+    IntentClassification,
+    PlanningState,
+    TripRequest,
+)
+from intake_router import (
+    CONFIDENCE_TAU,
+    classify,
+    full_slot_gate,
+    is_place_lookup,
+    slot_gate,
+)
 from places import resolve_venue
 
 logger = logging.getLogger("graph.router")
@@ -243,6 +254,17 @@ def _parse_date(raw: str | None) -> date | None:
         return None
 
 
+def _parse_must_include(slots: dict) -> list[str]:
+    """Places the user named explicitly ("...in moonlight beach").
+
+    Comma-separated in the slot; the planner reads the list off TripRequest
+    and pre-planning pins them to the top of the proposed places.
+    """
+    return [
+        p.strip() for p in (slots.get("must_include") or "").split(",") if p.strip()
+    ]
+
+
 def _hydrate_trip_request(
     intent: IntentClassification,
     explicit: TripRequest | None,
@@ -255,37 +277,59 @@ def _hydrate_trip_request(
     """
     slots = intent.extracted_slots
     slot_dest = (slots.get("destination") or "").strip().lower()
+    must_include = _parse_must_include(slots)
     if explicit is not None:
         explicit_dest = (explicit.destination or "").strip().lower()
         if slot_dest and slot_dest != explicit_dest:
             explicit = None  # fall through to build fresh from slots
         else:
-            return explicit
+            # Reuse the persisted trip, but must_include is per-message, not
+            # sticky: it means "the places named in THIS request". Without
+            # the refresh, a later "plan a 1 day trip in Sudbury" inherits
+            # the Moonlight Beach from an earlier trip to the same city.
+            if list(explicit.must_include) != must_include:
+                logger.info(
+                    "hydrate_trip: must_include %s → %s (from this message)",
+                    explicit.must_include, must_include,
+                )
+            return explicit.model_copy(update={"must_include": must_include})
 
     destination = slots.get("destination")
     if not destination:
         return None
 
-    origin = slots.get("origin", "Unknown")
+    origin = slots.get("origin") or UNKNOWN_ORIGIN
+    # Dates stay None if the user didn't provide them — the FULL flow asks
+    # for num_days instead, and the DIRECT hotel path re-gates on 'dates'
+    # via REQUIRED_SLOTS. Never fabricate calendar dates here.
     start = _parse_date(slots.get("start_date") or slots.get("dates"))
     end = _parse_date(slots.get("end_date"))
-    if start is None:
-        start = date.today() + timedelta(days=30)
-    if end is None:
-        end = start + timedelta(days=2)
 
     travelers = int(slots.get("travelers") or 1)
     budget = float(slots.get("budget") or 0.0)
     currency = slots.get("currency", "USD")
+
+    # num_days: prefer explicit slot; else derive from date range; else 1.
+    if slots.get("num_days"):
+        try:
+            num_days = max(1, int(slots["num_days"]))
+        except (TypeError, ValueError):
+            num_days = 1
+    elif start and end:
+        num_days = max(1, (end - start).days + 1)
+    else:
+        num_days = 1
 
     return TripRequest(
         origin=origin,
         destination=destination,
         start_date=start,
         end_date=end,
+        num_days=num_days,
         travelers=travelers,
         total_budget=budget,
         currency=currency,
+        must_include=must_include,
     )
 
 
@@ -329,7 +373,25 @@ def hydrate_trip(state: PlanningState) -> dict:
             "missing_slots": [],
             "followup_question": None,
             "revision_feedback": None,
+            # New trip — the previous trip's confirmed length says nothing
+            # about this one, so let ask_num_days fire again unless this
+            # turn's message carried an explicit length.
+            "num_days_confirmed": False,
         })
+
+    # The user already told us how long ("a 1 day trip", or a real date
+    # range) — treat that as the answer to ask_num_days instead of asking a
+    # question they just answered. Only ever set True: hydrate_trip runs on
+    # every turn, so writing False here would clobber the confirmation
+    # parse_num_days_node recorded on an earlier turn.
+    slots = state.intent.extracted_slots if state.intent else {}
+    if slots.get("num_days") or (slots.get("start_date") and slots.get("end_date")):
+        logger.info(
+            "hydrate_trip: explicit length (%d day(s)) — skipping ask_num_days",
+            trip.num_days,
+        )
+        updates["num_days_confirmed"] = True
+
     return updates
 
 
@@ -351,20 +413,41 @@ def check_slot_gate(state: PlanningState) -> dict:
     if intent is None:
         return {"missing_slots": [], "followup_question": None}
 
+    # Answer-mode lookup of a named place ("when does <place> open") searches
+    # by `place_name` and never reads destination. Guard before the branches
+    # below because the `trip_request is None` branch is exactly the case
+    # that fires here — no destination slot means nothing to hydrate — and it
+    # recomputes slot_gate from scratch, discarding the same exemption
+    # already applied in `classify`.
+    if is_place_lookup(
+        intent.route,
+        intent.answer_mode,
+        intent.extracted_slots,
+        intent.target_agents,
+    ):
+        logger.info(
+            "check_slot_gate → place lookup %r, skipping destination gate",
+            intent.extracted_slots.get("place_name"),
+        )
+        return {"missing_slots": [], "followup_question": None}
+
     if state.trip_request is None:
         agents_for_gate = intent.target_agents or ["route", "hotel"]
-        missing = slot_gate(agents_for_gate, intent.extracted_slots)
+        # FULL skips FULL_OPTIONAL_SLOTS even before hydration.
+        missing = (
+            full_slot_gate(agents_for_gate, intent.extracted_slots)
+            if intent.route == "full"
+            else slot_gate(agents_for_gate, intent.extracted_slots)
+        )
     elif intent.route == "direct":
         missing = intent.missing_required_slots or slot_gate(
             intent.target_agents, intent.extracted_slots
         )
     else:
-        # FULL — hydrate_trip fills defaults for anything the user didn't
-        # specify (e.g. dates default to today+30 → today+32). Those
-        # defaults must NOT silently reach confirm_basics; ask for real
-        # values first. Gate on what the classifier actually extracted,
-        # not on trip_request presence.
-        missing = slot_gate(intent.target_agents, intent.extracted_slots)
+        # FULL — gate on destination only. `dates` is collected later as
+        # num_days by ask_num_days_node, and `origin` is optional: a local
+        # day trip has no journey, so we plan without one.
+        missing = full_slot_gate(intent.target_agents, intent.extracted_slots)
 
     logger.info("check_slot_gate → missing=%s", missing)
     if missing:

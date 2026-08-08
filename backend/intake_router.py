@@ -31,6 +31,12 @@ logger = logging.getLogger("intake_router")
 CONFIDENCE_TAU = 0.55
 
 
+# Agents whose sub-agent accepts a `place_name` override and can therefore
+# run an answer-mode lookup without a destination. `route` is excluded on
+# purpose — run_route_agent has no place_name path.
+_PLACE_LOOKUP_AGENTS = {"hotel", "restaurant", "event"}
+
+
 # Backstop for a specific classifier failure: "traveling from X to Y" without
 # any transport-mode word tends to get labelled DIRECT+[route] (pattern-match
 # on the "trains from Rome to Florence" example), producing a bare transport
@@ -92,9 +98,22 @@ _ROUTER_TOOL = {
                 "extracted_slots": {
                     "type": "object",
                     "description": (
-                        "Slot values you were able to extract. Common keys: "
-                        "origin, destination, dates, start_date, end_date, travelers, "
-                        "budget, currency, hotel_rating, cuisine."
+                        "Slot values you were able to extract. Use ONLY these "
+                        "keys — an invented key (e.g. 'cultural_location') is "
+                        "dropped silently downstream:\n"
+                        "  origin, destination, start_date, end_date, dates, "
+                        "num_days, travelers, budget, currency, hotel_rating, "
+                        "cuisine, must_include, place_name.\n"
+                        "- num_days: trip length as a bare integer. 'a 1 day "
+                        "trip' → num_days='1'; 'long weekend' → num_days='3'. "
+                        "Do NOT put a duration in `dates` — that key is for "
+                        "calendar dates only.\n"
+                        "- must_include: specific places/attractions the user "
+                        "named that the plan must feature, comma-separated. "
+                        "'a day in Sudbury in moonlight beach' → "
+                        "destination='Sudbury', must_include='Moonlight Beach'.\n"
+                        "- origin: only when the user says where they are "
+                        "travelling FROM. Never guess it from the destination."
                     ),
                     "additionalProperties": {"type": "string"},
                 },
@@ -240,9 +259,13 @@ def _session_context_message(
     from topic resets and to know when REVISE is even a valid choice."""
     lines: list[str] = ["SESSION CONTEXT (persisted across turns):"]
     if trip is not None:
+        if trip.start_date and trip.end_date:
+            dates_part = f"dates={trip.start_date}→{trip.end_date}"
+        else:
+            dates_part = f"num_days={trip.num_days} (no explicit dates)"
         lines.append(
             f"- current trip_request: destination={trip.destination!r} "
-            f"origin={trip.origin!r} dates={trip.start_date}→{trip.end_date} "
+            f"origin={trip.origin!r} {dates_part} "
             f"travelers={trip.travelers}"
         )
     else:
@@ -440,29 +463,40 @@ async def classify(
                 confidence = max(confidence, 0.85)
             extracted = merged_slots
 
-    # Compute missing slots for both DIRECT and FULL. FULL used to skip
-    # this — but the pending-turn MERGE prompt in _pending_turn_context_message
-    # only fires when prior_intent.missing_required_slots is non-empty.
-    # Without it, a FULL turn that paused on "what dates?" reclassifies the
-    # user's date reply from scratch (often as DIRECT+route → transport
-    # dump) instead of merging into the pending FULL intent.
-    missing = (
-        slot_gate(target_agents, extracted)
-        if route in ("direct", "full")
-        else []
-    )
-
-    if downgraded:
-        logger.info(
-            "confidence gate downgraded direct→full (tau=%.2f, confidence=%.2f)",
-            CONFIDENCE_TAU, confidence,
-        )
     raw_answer_mode = args.get("answer_mode") or "list"
     answer_mode = raw_answer_mode if raw_answer_mode in ("list", "answer") else "list"
     # answer_mode is meaningless outside DIRECT — clamp so downstream can't
     # accidentally branch on it for other routes.
     if route != "direct":
         answer_mode = "list"
+
+    # Compute missing slots for both DIRECT and FULL. FULL used to skip
+    # this — but the pending-turn MERGE prompt in _pending_turn_context_message
+    # only fires when prior_intent.missing_required_slots is non-empty.
+    # Without it, a FULL turn that paused on "what dates?" reclassifies the
+    # user's date reply from scratch (often as DIRECT+route → transport
+    # dump) instead of merging into the pending FULL intent.
+    #
+    # Exception: answer_mode='answer' searches Google by `place_name` (see
+    # the subgraph _place_name helpers), never by destination. Gating it on
+    # destination asks for a slot the answer path never reads — "when does
+    # <place> open" would stall on "what destination?" instead of answering.
+    # Only the place-search agents honour `place_name`; run_route_agent has
+    # no such path and still needs origin/destination, so it keeps gating.
+    if is_place_lookup(route, answer_mode, extracted, target_agents):
+        missing = []
+    elif route == "full":
+        missing = full_slot_gate(target_agents, extracted)
+    elif route == "direct":
+        missing = slot_gate(target_agents, extracted)
+    else:
+        missing = []
+
+    if downgraded:
+        logger.info(
+            "confidence gate downgraded direct→full (tau=%.2f, confidence=%.2f)",
+            CONFIDENCE_TAU, confidence,
+        )
 
     logger.info(
         "classified: route=%s agents=%s missing_slots=%s answer_mode=%s",
@@ -477,6 +511,58 @@ async def classify(
         confidence=confidence,
         rationale=args.get("rationale"),
         answer_mode=answer_mode,
+    )
+
+
+# Slots the FULL route never blocks on.
+#   dates  — pre-planning collects length via ask_num_days_node instead.
+#   origin — a trip doesn't always start somewhere else; a local day out has
+#            no journey to plan, so we proceed rather than stall. Transport
+#            still renders from TripRequest.origin's "Unknown" default.
+FULL_OPTIONAL_SLOTS = {"dates", "origin"}
+
+
+def full_slot_gate(
+    target_agents: list[str],
+    extracted_slots: dict[str, str],
+) -> list[str]:
+    """`slot_gate` for the FULL route — same rules minus FULL_OPTIONAL_SLOTS.
+
+    Shared by `classify` and `check_slot_gate` because those two compute the
+    gate independently; a rule applied in only one is recomputed away by the
+    other. See `is_place_lookup` for the same hazard.
+    """
+    return [
+        s for s in slot_gate(target_agents, extracted_slots)
+        if s not in FULL_OPTIONAL_SLOTS
+    ]
+
+
+def is_place_lookup(
+    route: str,
+    answer_mode: str,
+    extracted_slots: dict[str, str],
+    target_agents: list[str],
+) -> bool:
+    """True when this turn is an answer-mode lookup of one named place.
+
+    Such turns search Google by `extracted_slots['place_name']` and never
+    read `destination` (see the `_place_name` helpers in graph/subgraphs/),
+    so gating them on destination asks for a slot the answer path ignores.
+
+    Lives here, and is called from both `classify` and `check_slot_gate`,
+    because those two compute the gate independently — a rule applied in
+    only one of them gets silently recomputed away by the other.
+
+    `route` agents are excluded: run_route_agent has no place_name path and
+    still genuinely needs origin/destination.
+    """
+    return bool(
+        route == "direct"
+        and answer_mode == "answer"
+        and extracted_slots.get("place_name")
+        and target_agents
+        and set(target_agents) <= _PLACE_LOOKUP_AGENTS
     )
 
 

@@ -118,9 +118,12 @@ def load_agent_data(state: PlanningState) -> tuple[bool, list[str]]:
         errors.append("Hotel Agent returned no options.")
     if not state.event_options:
         errors.append("Event Agent returned no options.")
-    if not state.route_options:
+    # Route absence is only fatal when there was a journey to plan. With no
+    # origin the route agent deliberately returns [] and the plan simply has
+    # no transport leg. Restaurant absence is soft either way.
+    trip = state.trip_request
+    if not state.route_options and trip is not None and trip.has_origin:
         errors.append("Route Agent returned no options.")
-    # Restaurant absence is soft — not fatal.
     return (len(errors) == 0, errors)
 
 
@@ -191,7 +194,11 @@ def _serialise_restaurants(rs: list[RestaurantOption]) -> list[dict[str, Any]]:
     ]
 
 
-def _serialise_route(r: RouteOption) -> dict[str, Any]:
+def _serialise_route(r: RouteOption | None) -> dict[str, Any] | None:
+    # None when the trip has no origin — the planner is told there's no
+    # transport leg rather than being handed a fabricated one.
+    if r is None:
+        return None
     return {
         "route_id": r.route_id, "mode": r.mode,
         "total_cost": r.total_cost, "total_duration_minutes": r.total_duration_minutes,
@@ -212,7 +219,7 @@ def _serialise_route(r: RouteOption) -> dict[str, Any]:
 def _build_planner_prompt(
     trip: TripRequest,
     user: UserProfile | None,
-    route: RouteOption,
+    route: RouteOption | None,
     hotels: list[HotelOption],
     restaurants: list[RestaurantOption],
     events: list[EventOption],
@@ -231,12 +238,19 @@ def _build_planner_prompt(
         "special_occasion": trip.special_occasion,
     }
 
+    # When the user didn't pin real dates, anchor synthetic ones to today
+    # so the planner has concrete day labels. The Itinerary card shows
+    # date ranges — those still need to be usable strings.
+    anchor_start = trip.start_date or date.today()
+    anchor_end = trip.end_date or (anchor_start + timedelta(days=max(trip.num_days, 1) - 1))
     payload = {
         "trip": {
-            "origin": trip.origin,
+            # Omitted when unknown so the planner doesn't render the
+            # "Unknown" placeholder as if it were a real city.
+            "origin": trip.origin if trip.has_origin else None,
             "destination": trip.destination,
-            "start_date": trip.start_date.isoformat(),
-            "end_date":   trip.end_date.isoformat(),
+            "start_date": anchor_start.isoformat(),
+            "end_date":   anchor_end.isoformat(),
             "num_days":   trip.num_days,
             "currency":   trip.currency,
         },
@@ -258,7 +272,10 @@ def _build_planner_prompt(
         "  5. Stay within the food + activities budgets.\n"
         "  6. Include must_include items, exclude must_exclude items.\n"
         "  7. Reference item ids in `item_ref` whenever you use one of the options.\n"
-        "  8. Do not invent places that are not in the provided options.\n\n"
+        "  8. Do not invent places that are not in the provided options.\n"
+        "  9. When `chosen_route` is null there is no inbound/outbound journey "
+        "(a local trip) — plan only within the destination and do not invent "
+        "flights, trains, or transfers to or from it.\n\n"
         f"DATA:\n{json.dumps(payload, indent=2)}"
     )
 
@@ -468,8 +485,12 @@ async def run_planning(state: PlanningState) -> Itinerary:
     if not ok:
         raise RuntimeError("Missing agent outputs: " + "; ".join(errors))
 
-    # Pick the cheapest route as the default (Phase-1 heuristic).
-    chosen_route = min(state.route_options, key=lambda r: r.total_cost)
+    # Pick the cheapest route as the default (Phase-1 heuristic). None when
+    # the trip has no origin — load_agent_data lets that through.
+    chosen_route = (
+        min(state.route_options, key=lambda r: r.total_cost)
+        if state.route_options else None
+    )
 
     style = (
         state.user_profile.preferences.travel_style
@@ -548,7 +569,7 @@ def _serialise_itinerary_for_llm(it: Itinerary) -> dict[str, Any]:
 def _build_revision_prompt(
     trip: TripRequest,
     user: UserProfile | None,
-    route: RouteOption,
+    route: RouteOption | None,
     hotels: list[HotelOption],
     restaurants: list[RestaurantOption],
     events: list[EventOption],
@@ -604,7 +625,10 @@ async def revise_itinerary(state: PlanningState) -> Itinerary:
     if not ok:
         raise RuntimeError("Missing agent outputs: " + "; ".join(errors))
 
-    chosen_route = min(state.route_options, key=lambda r: r.total_cost)
+    chosen_route = (
+        min(state.route_options, key=lambda r: r.total_cost)
+        if state.route_options else None
+    )
     style = (
         state.user_profile.preferences.travel_style
         if state.user_profile else "balanced"

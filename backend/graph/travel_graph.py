@@ -63,11 +63,13 @@ from graph.nodes_itinerary import (
 )
 from graph.nodes_preplanning import (
     ask_day_by_day_node,
+    ask_num_days_node,
     confirm_basics_node,
     elicit_scope_node,
     fill_missing_agents_node,
     parse_confirm_node,
     parse_daybyday_node,
+    parse_num_days_node,
     parse_places_reply_node,
     parse_scope_node,
     parse_stays_reply_node,
@@ -75,6 +77,7 @@ from graph.nodes_preplanning import (
     propose_stays_for_selection_node,
     route_after_parse_confirm,
     route_after_parse_daybyday,
+    route_after_parse_num_days,
     route_after_parse_places,
     route_after_parse_scope,
     route_after_parse_stays,
@@ -166,8 +169,13 @@ def _slot_gate_route(state: PlanningState):
 
     if intent.route == "direct":
         return _AGENT_TO_SUBGRAPH[intent.target_agents[0]]
-    # FULL → pre-planning.
-    return "elicit_scope" if state.basics_confirmed else "confirm_basics"
+    # FULL → pre-planning. Order: confirm_basics → ask_num_days → elicit_scope.
+    # Each step's sticky flag skips it once completed for this session.
+    if not state.basics_confirmed:
+        return "confirm_basics"
+    if not state.num_days_confirmed:
+        return "ask_num_days"
+    return "elicit_scope"
 
 
 def _route_after_dispatch(state: PlanningState) -> str:
@@ -229,6 +237,8 @@ def build_travel_graph():
     # through these instead of the parallel four-subgraph fan-out.
     g.add_node("confirm_basics", confirm_basics_node)
     g.add_node("parse_confirm", parse_confirm_node)
+    g.add_node("ask_num_days", ask_num_days_node)
+    g.add_node("parse_num_days", parse_num_days_node)
     g.add_node("elicit_scope", elicit_scope_node)
     g.add_node("parse_scope", parse_scope_node)
     g.add_node("propose_places", propose_places_node)
@@ -273,12 +283,25 @@ def build_travel_graph():
     )
 
     # ── Pre-planning chain (FULL route) ──────────────────────────────────
-    # confirm_basics → wait → parse_confirm → elicit_scope (or hydrate_trip)
+    # confirm_basics → wait → parse_confirm → ask_num_days | elicit_scope | hydrate_trip
     g.add_edge("confirm_basics", "wait_for_next_message")
     g.add_conditional_edges(
         "parse_confirm",
         route_after_parse_confirm,
-        {"elicit_scope": "elicit_scope", "hydrate_trip": "hydrate_trip"},
+        {
+            "ask_num_days": "ask_num_days",
+            "elicit_scope": "elicit_scope",
+        },
+    )
+    # ask_num_days → wait → parse_num_days → elicit_scope (or stay if question)
+    g.add_edge("ask_num_days", "wait_for_next_message")
+    g.add_conditional_edges(
+        "parse_num_days",
+        route_after_parse_num_days,
+        {
+            "wait_for_next_message": "wait_for_next_message",
+            "elicit_scope": "elicit_scope",
+        },
     )
     # elicit_scope → wait → parse_scope → propose_places
     g.add_edge("elicit_scope", "wait_for_next_message")
@@ -343,6 +366,7 @@ def build_travel_graph():
         {
             "intent_decision": "intent_decision",
             "parse_confirm": "parse_confirm",
+            "parse_num_days": "parse_num_days",
             "parse_scope": "parse_scope",
             "parse_places_reply": "parse_places_reply",
             "parse_stays_reply": "parse_stays_reply",

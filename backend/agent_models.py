@@ -43,11 +43,27 @@ class UserProfile(BaseModel):
     travel_history: list[TripSummary] = []
 
 
+# Placeholder written by `_hydrate_trip_request` when the user never said
+# where they're travelling from. Origin is optional (FULL_OPTIONAL_SLOTS):
+# a local day out has no journey to plan, so we proceed without one and
+# skip transport rather than inventing a leg from nowhere.
+UNKNOWN_ORIGIN = "Unknown"
+
+
 class TripRequest(BaseModel):
     origin: str
     destination: str
-    start_date: date
-    end_date: date
+    # Dates are only semantically required for stays (hotel bookings). They
+    # remain optional on the model; the FULL pre-planning flow asks the user
+    # for `num_days` instead and only prompts for dates on the DIRECT hotel
+    # path via slot_gate + REQUIRED_SLOTS["hotel"].
+    start_date: date | None = None
+    end_date: date | None = None
+    # Explicit num_days is the primary planning knob. Defaults to a
+    # single-day trip; ask_num_days_node overrides this before pre-planning
+    # advances to elicit_scope. When both dates are present they take
+    # precedence via `effective_num_days`.
+    num_days: int = 1
     travelers: int = 1
     total_budget: float = 0.0
     currency: str = "USD"
@@ -56,8 +72,15 @@ class TripRequest(BaseModel):
     special_occasion: str | None = None
 
     @property
-    def num_days(self) -> int:
-        return (self.end_date - self.start_date).days + 1
+    def has_origin(self) -> bool:
+        """True when the user actually told us where they're starting from.
+
+        Everything transport-related keys off this: no origin means no
+        route options, no transport budget, and no travel segments in the
+        plan. See UNKNOWN_ORIGIN.
+        """
+        origin = (self.origin or "").strip()
+        return bool(origin) and origin.lower() != UNKNOWN_ORIGIN.lower()
 
 
 # --------------------------------------------------------------------------- #
@@ -224,10 +247,13 @@ class IntentClassification(BaseModel):
 
 
 # Required-slot sets per agent — used by the direct flow's slot gate (§3.4).
+# Dates are only gated for stays (hotel); routes/restaurants/events don't
+# demand a specific calendar window. The FULL pre-planning flow collects
+# `num_days` via a dedicated ask_num_days step instead of gating on dates.
 REQUIRED_SLOTS: dict[str, set[str]] = {
     "hotel": {"destination", "dates"},
     "restaurant": {"destination"},
-    "route": {"origin", "destination", "dates"},
+    "route": {"origin", "destination"},
     "event": {"destination"},
 }
 
@@ -256,6 +282,7 @@ Phase = Literal[
 # features/pre_planning.md.
 PreStage = Literal[
     "confirm_basics",
+    "num_days",
     "scope",
     "places",
     "stays",
@@ -317,6 +344,9 @@ class PlanningState(BaseModel):
     # FULL route.
     planning_scope: PlanningScope | None = None
     basics_confirmed: bool = False
+    # Sticky flag — once the user answers ask_num_days_node in this
+    # session, we don't re-ask on subsequent turns.
+    num_days_confirmed: bool = False
     options_payload: dict | None = None
     selected_place_ids: list[str] = []
     selected_stay_ids: list[str] = []

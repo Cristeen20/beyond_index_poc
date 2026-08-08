@@ -58,22 +58,63 @@ def _prefs(state: PlanningState):
 
 
 def _confirm_basics_payload(trip) -> dict:
+    # Origin is optional (FULL_OPTIONAL_SLOTS) — a local day out has no
+    # journey, and _hydrate_trip_request leaves the placeholder "Unknown"
+    # behind. Say "Trip to X" rather than showing the placeholder.
+    lead = (
+        f"From {trip.origin} to {trip.destination}"
+        if trip.has_origin
+        else f"Trip to {trip.destination}"
+    )
+
+    # Dates only appear here when the user actually provided them.
+    # Otherwise we defer to the ask_num_days step and just show the lead +
+    # travelers.
+    if trip.start_date and trip.end_date:
+        window = f"{trip.start_date} → {trip.end_date}"
+        description = (
+            f"{lead}, {trip.num_days} day(s) ({window}), "
+            f"{trip.travelers} traveler(s)."
+        )
+    else:
+        description = f"{lead}, {trip.travelers} traveler(s)."
+
+    if trip.must_include:
+        description += f" Including {', '.join(trip.must_include)}."
     return {
         "kind": "confirm_basics",
         "title": "Ready to plan?",
-        "description": (
-            f"From {trip.origin} to {trip.destination}, "
-            f"{trip.num_days} day(s) ({trip.start_date} → {trip.end_date}), "
-            f"{trip.travelers} traveler(s)."
-        ),
+        "description": description,
         "items": [],
         "actions": [
             {"id": "confirm", "label": "Yes, let's plan"},
-            {"id": "correct", "label": "Change something"},
         ],
         "select": "none",
         "page": 0,
         "has_more": False,
+    }
+
+
+def _num_days_payload(current: int) -> dict:
+    return {
+        "kind": "num_days",
+        "title": "How many days is this trip?",
+        "description": (
+            "Pick a number of days, or type a custom number."
+        ),
+        "items": [],
+        "actions": [
+            {"id": "1", "label": "1 day"},
+            {"id": "2", "label": "2 days"},
+            {"id": "3", "label": "3 days"},
+            {"id": "4", "label": "4 days"},
+            {"id": "5", "label": "5 days"},
+            {"id": "7", "label": "1 week"},
+        ],
+        "select": "none",
+        "page": 0,
+        "has_more": False,
+        "meta": {"current": current},
     }
 
 
@@ -244,19 +285,13 @@ def confirm_basics_node(state: PlanningState) -> dict:
 async def parse_confirm_node(state: PlanningState) -> dict:
     """Parse the reply to the confirm_basics card.
 
-    Buttons on the card:
-      - id="confirm" → basics confirmed, advance to elicit_scope.
-      - id="correct" → user wants to change something; edge re-enters
-        hydrate_trip so their free-text correction is folded in.
-
-    A structured `option_action.action="correct"` from the frontend takes
-    the correct path. A free-text reply is parsed by the fallback LLM and
-    normalised into confirm / correct / question — asking a question about
-    the trip keeps the card up and returns an answer instead of finalising.
+    The card only offers a single "Yes, let's plan" button — parameters
+    aren't editable at this stage. So any non-question reply is treated
+    as confirmation; free-text questions keep the card up and get an
+    LLM-answered response.
     """
     action = await _resolve_action(state)
     kind = action.get("action")
-    ids = {i.lower() for i in (action.get("ids") or [])}
 
     if kind == "question":
         answer = await _answer_over_card(
@@ -265,29 +300,133 @@ async def parse_confirm_node(state: PlanningState) -> dict:
         )
         return {"response_message": answer, "option_action": None}
 
-    is_correct = kind == "correct" or "correct" in ids
-    is_confirm = not is_correct and (
-        kind == "confirm" or "confirm" in ids
-    )
+    logger.info("parse_confirm_node → basics confirmed")
+    return {
+        "basics_confirmed": True,
+        "options_payload": None,
+        "pending_stage": None,
+        "option_action": None,
+    }
 
-    if is_confirm:
-        logger.info("parse_confirm_node → basics confirmed")
+
+# --------------------------------------------------------------------------- #
+# Stage 1b — ask number of days
+# --------------------------------------------------------------------------- #
+
+
+def ask_num_days_node(state: PlanningState) -> dict:
+    """Ask the user to confirm the trip length before pre-planning advances.
+
+    Fires on every FULL trip (per design decision 1a). Even when the
+    classifier extracted num_days or a date range, we still surface the
+    ask so the user gets one canonical place to change the length. The
+    default `num_days` from state is passed through in payload meta so
+    the frontend can highlight it.
+    """
+    trip = state.trip_request
+    current = max(getattr(trip, "num_days", 1) or 1, 1) if trip else 1
+    payload = _num_days_payload(current)
+    logger.info("ask_num_days_node → asking (current default=%d)", current)
+    return {
+        "options_payload": payload,
+        "pending_stage": "num_days",
+        "phase": "pre_planning",
+        "response_message": payload["title"],
+    }
+
+
+def _extract_num_days(action: dict) -> int | None:
+    """Pull a positive integer out of the action.
+
+    Order: `ids[0]` (button click carries the numeric id), then free
+    text. Returns None if nothing sensible parsed.
+    """
+    ids = action.get("ids") or []
+    if ids:
+        try:
+            n = int(str(ids[0]).strip())
+            if n >= 1:
+                return n
+        except (TypeError, ValueError):
+            pass
+
+    text = (action.get("text") or "").strip().lower()
+    if not text:
+        return None
+    # Grab the first integer in the reply (handles "3", "3 days", "make it 5").
+    import re
+    m = re.search(r"\d+", text)
+    if m:
+        try:
+            n = int(m.group(0))
+            if n >= 1:
+                return n
+        except ValueError:
+            pass
+    words = {
+        "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+        "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+        "week": 7, "weekend": 2,
+    }
+    for w, n in words.items():
+        if w in text:
+            return n
+    return None
+
+
+async def parse_num_days_node(state: PlanningState) -> dict:
+    """Parse the reply to the ask_num_days card.
+
+    Accepts numeric button ids ("3") or free text ("3 days", "a week").
+    Free-text questions about the trip keep the card up and get answered.
+    Updates `trip_request.num_days` in-place; also derives an `end_date`
+    when the trip already has a `start_date` so downstream stays/planner
+    stay coherent.
+    """
+    action = await _resolve_action(state)
+    kind = action.get("action")
+
+    if kind == "question":
+        answer = await _answer_over_card(
+            question=action.get("text") or state.incoming_message,
+            payload=state.options_payload or {},
+        )
+        return {"response_message": answer, "option_action": None}
+
+    n = _extract_num_days(action)
+    if n is None:
+        # Unrecognised reply — keep the card up with a hint.
+        logger.info("parse_num_days_node → could not parse %r", action)
         return {
-            "basics_confirmed": True,
+            "response_message": (
+                "I couldn't read a number of days from that. "
+                "Tap one of the options or type a number like '3'."
+            ),
+            "option_action": None,
+        }
+
+    trip = state.trip_request
+    if trip is None:
+        logger.warning("parse_num_days_node → no trip_request; skipping update")
+        return {
             "options_payload": None,
             "pending_stage": None,
             "option_action": None,
         }
 
-    logger.info("parse_confirm_node → user wants to correct (%r)", action)
+    from datetime import timedelta
+    updated = trip.model_copy(update={"num_days": n})
+    if updated.start_date:
+        updated = updated.model_copy(
+            update={"end_date": updated.start_date + timedelta(days=n - 1)}
+        )
+    logger.info("parse_num_days_node → num_days=%d", n)
     return {
-        "basics_confirmed": False,
+        "trip_request": updated,
+        "num_days_confirmed": True,
         "options_payload": None,
         "pending_stage": None,
         "option_action": None,
-        # incoming_message already has the user's correction text from
-        # wait_for_next_message's resume payload. hydrate_trip re-reads
-        # slots on the way through.
     }
 
 
@@ -370,6 +509,38 @@ def _num_places_per_page(trip) -> int:
     return max(3, min(3 * max(trip.num_days, 1), 15))
 
 
+def _matches_must_include(name: str, must_include: list[str]) -> bool:
+    """Loose name match — Google rarely echoes the user's wording exactly
+    ("moonlight beach" → "Moonlight Beach Park"), so match either direction."""
+    n = (name or "").strip().lower()
+    if not n:
+        return False
+    return any(
+        n in m.strip().lower() or m.strip().lower() in n
+        for m in must_include if m.strip()
+    )
+
+
+def _pin_must_include(candidates: list, must_include: list[str]) -> list:
+    """Move user-named places to the front of the candidate list.
+
+    A 1-day trip only shows 3 places per page, so a place the user asked
+    for by name has to be pinned rather than left to compete with generic
+    attractions on rank — otherwise "plan a day in Sudbury in moonlight
+    beach" proposes three things that aren't Moonlight Beach.
+    """
+    if not must_include:
+        return candidates
+    pinned = [c for c in candidates if _matches_must_include(c.name, must_include)]
+    if not pinned:
+        logger.info("propose_places → must_include %s not found in results",
+                    must_include)
+        return candidates
+    rest = [c for c in candidates if c not in pinned]
+    logger.info("propose_places → pinning %d must-include place(s)", len(pinned))
+    return pinned + rest
+
+
 async def propose_places_node(state: PlanningState) -> dict:
     trip = state.trip_request
     page = state.options_page or 0
@@ -381,6 +552,7 @@ async def propose_places_node(state: PlanningState) -> dict:
         candidates = await run_event_agent(trip, _prefs(state), limit=48)
     else:
         candidates = state.event_options
+    candidates = _pin_must_include(candidates, trip.must_include)
 
     start = page * per_page
     slice_ = candidates[start:start + per_page]
@@ -415,6 +587,10 @@ async def propose_places_node(state: PlanningState) -> dict:
     items = []
     for e in slice_:
         rank, rationale = ranks.get(e.event_id, (999, ""))
+        # The user asked for this one by name — it outranks the ranker.
+        if _matches_must_include(e.name, trip.must_include):
+            rank = -1
+            rationale = rationale or "You asked to include this."
         items.append({
             "id": e.event_id,
             "name": e.name,
@@ -488,13 +664,35 @@ async def parse_places_reply_node(state: PlanningState) -> dict:
 
     ids = action.get("ids") or []
     logger.info("parse_places_reply_node → selected %d place(s)", len(ids))
-    return {
+    updates: dict = {
         "selected_place_ids": ids,
         "options_payload": None,
         "pending_stage": None,
         "option_action": None,
         "options_page": 0,  # reset for the next stage's paging
     }
+
+    # For places_only this IS the last node of the turn — route_after_parse_places
+    # goes straight to wait_for_next_message, so nothing downstream writes a
+    # response. wait_for_next_message blanks response_message on every resume,
+    # so without this the turn ends empty and the API projection falls back to
+    # "Sorry, I couldn't put a plan together." Other scopes overwrite this with
+    # their own card title a node later.
+    if state.planning_scope == "places_only":
+        picked = [
+            e.name for e in state.event_options
+            if e.event_id in set(ids)
+        ]
+        updates["response_message"] = (
+            f"Saved your {len(picked)} pick(s): {', '.join(picked)}. "
+            "Ask me anything about them, or say 'plan the days' for a "
+            "full itinerary."
+            if picked else
+            "I didn't catch which places you wanted — tell me the names "
+            "and I'll save them."
+        )
+
+    return updates
 
 
 # --------------------------------------------------------------------------- #
@@ -916,6 +1114,8 @@ def route_after_wait(state: PlanningState) -> str:
     stage = state.pending_stage
     if stage == "confirm_basics":
         return "parse_confirm"
+    if stage == "num_days":
+        return "parse_num_days"
     if stage == "scope":
         return "parse_scope"
     if stage == "places":
@@ -928,7 +1128,19 @@ def route_after_wait(state: PlanningState) -> str:
 
 
 def route_after_parse_confirm(state: PlanningState) -> str:
-    return "elicit_scope" if state.basics_confirmed else "hydrate_trip"
+    # parse_confirm always sets basics_confirmed=True (there's no
+    # "Change" button anymore). Skip re-asking num_days once answered.
+    return "elicit_scope" if state.num_days_confirmed else "ask_num_days"
+
+
+def route_after_parse_num_days(state: PlanningState) -> str:
+    """After the num_days card:
+    - options_payload still set → we answered a question; keep the card up
+    - otherwise → advance to elicit_scope
+    """
+    if state.options_payload is not None:
+        return "wait_for_next_message"
+    return "elicit_scope"
 
 
 def route_after_parse_scope(state: PlanningState) -> str:
