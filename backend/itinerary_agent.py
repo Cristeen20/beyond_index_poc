@@ -14,7 +14,7 @@ import uuid
 from datetime import date, datetime, timedelta
 from typing import Any
 
-import openai
+from langfuse.openai import openai
 
 logger = logging.getLogger("itinerary_agent")
 

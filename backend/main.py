@@ -19,6 +19,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from langfuse.decorators import langfuse_context
 
 from agent_models import PlanRequest, PlanResponse
 from graph import close_checkpointer, init_checkpointer
@@ -32,6 +33,10 @@ async def lifespan(_: FastAPI):
     await init_checkpointer()
     yield
     await close_checkpointer()
+    # Drain any pending Langfuse spans before the process exits — the SDK
+    # batches in the background and would otherwise drop the tail on a
+    # serverless cold-stop. No-op when Langfuse env vars are unset.
+    langfuse_context.flush()
 
 
 app = FastAPI(title="Trip Itinerary Generator", version="0.1.0", lifespan=lifespan)

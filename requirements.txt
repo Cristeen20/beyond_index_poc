@@ -18,3 +18,8 @@ langgraph>=0.2.60
 # Durable checkpointer — see graph/session.py.
 langgraph-checkpoint-postgres>=3.1.2
 psycopg[binary,pool]>=3.2.0
+
+# Observability — drop-in OpenAI wrapper + @observe decorator route every LLM
+# call and each /plan turn to the self-hosted Langfuse instance (see
+# docker-compose.langfuse.yml). Inert when LANGFUSE_PUBLIC_KEY is unset.
+langfuse>=2.50.0,<3.0.0

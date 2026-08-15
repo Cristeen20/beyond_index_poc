@@ -16,7 +16,7 @@ import json
 import logging
 from datetime import date
 
-import openai
+from langfuse.openai import openai
 
 from agent_models import (
     UNKNOWN_ORIGIN,

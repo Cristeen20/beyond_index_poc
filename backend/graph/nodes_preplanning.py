@@ -25,7 +25,7 @@ from typing import Any
 
 import asyncio
 
-import openai
+from langfuse.openai import openai
 
 from agent_models import PlanningState
 from sub_agents import (

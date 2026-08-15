@@ -14,7 +14,7 @@ import json
 import logging
 from typing import Iterable
 
-import openai
+from langfuse.openai import openai
 
 from agent_models import (
     REQUIRED_SLOTS,

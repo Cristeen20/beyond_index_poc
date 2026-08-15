@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 
+from langfuse.decorators import langfuse_context, observe
 from langgraph.types import Command
 
 from agent_models import (
@@ -51,10 +52,23 @@ def _get_graph():
 # --------------------------------------------------------------------------- #
 
 
+@observe(name="plan_turn")
 async def plan(req: PlanRequest) -> PlanResponse:
     logger.info(
         "plan: session=%s message=%r", req.session_id, req.message,
     )
+    # Tie this turn (and every nested OpenAI span from the langfuse.openai
+    # wrapper) to the Langfuse Session for req.session_id. user_id lets
+    # Langfuse's Users view surface per-traveller history when a profile
+    # is attached. Inert when LANGFUSE_PUBLIC_KEY is unset.
+    langfuse_context.update_current_trace(
+        session_id=req.session_id,
+        user_id=req.user_profile.user_id if req.user_profile else None,
+        input={"message": req.message,
+               "option_action": req.option_action.model_dump(mode="json")
+                                if req.option_action else None},
+    )
+
     config = {"configurable": {"thread_id": req.session_id}}
 
     graph = _get_graph()
@@ -93,7 +107,14 @@ async def plan(req: PlanRequest) -> PlanResponse:
         final_dict = await graph.ainvoke(initial, config=config)
 
     final = PlanningState.model_validate(final_dict)
-    return _state_to_plan_response(final, req.session_id)
+    response = _state_to_plan_response(final, req.session_id)
+    langfuse_context.update_current_trace(
+        output={"route": response.route,
+                "message": response.message,
+                "has_itinerary": response.itinerary is not None,
+                "has_options": response.options_payload is not None},
+    )
+    return response
 
 
 def _state_to_plan_response(state: PlanningState, session_id: str) -> PlanResponse:

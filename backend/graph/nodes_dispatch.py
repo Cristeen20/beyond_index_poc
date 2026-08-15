@@ -17,7 +17,7 @@ import json
 import logging
 from typing import Any
 
-import openai
+from langfuse.openai import openai
 
 from agent_models import PlanningState
 

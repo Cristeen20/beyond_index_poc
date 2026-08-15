@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 import os
 
-import openai
+from langfuse.openai import openai
 from langchain_core.messages import AIMessage, BaseMessage
 
 from direct_chat.state import ChatState

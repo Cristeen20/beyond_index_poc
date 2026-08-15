@@ -16,3 +16,8 @@ langgraph>=0.2.60
 # for a purely local run.
 langgraph-checkpoint-postgres>=3.1.2
 psycopg[binary,pool]>=3.2.0
+
+# Observability — self-hosted Langfuse. See docker-compose.langfuse.yml at
+# repo root. Wrapped OpenAI SDK + @observe on plan() give one trace per
+# turn, grouped into a Langfuse Session by session_id.
+langfuse>=2.50.0,<3.0.0
