@@ -27,3 +27,4 @@ frontend/.vite/
 
 .commandcode/
 .vercel
+.env*.loca
