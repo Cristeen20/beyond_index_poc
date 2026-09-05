@@ -124,6 +124,22 @@ def _hotels_by_id(state: PlanningState):
 def check_conflicts_node(state: PlanningState) -> dict:
     days = _hydrate_days(state.draft_itinerary.get("days", []), _hotels_by_id(state))
     notes = resolve_conflicts(days, state.budget)
+
+    # When the user picked more than one stay, every pick must appear on at
+    # least one night. Otherwise the LLM silently drops the extras and the
+    # user's multi-stay selection is lost.
+    if len(state.selected_stay_ids or []) > 1:
+        picked = {h.hotel_id: h.name for h in state.hotel_options
+                  if h.hotel_id in set(state.selected_stay_ids)}
+        used = {d.accommodation.hotel_id for d in days if d.accommodation}
+        missing = [name for hid, name in picked.items() if hid not in used]
+        if missing:
+            notes.append(
+                f"Selected stays not used on any night: {', '.join(missing)}. "
+                "Split the trip's nights across ALL provided hotels — every "
+                "picked hotel must appear at least once."
+            )
+
     logger.info(
         "check_conflicts → %d conflict(s) attempt=%d",
         len(notes), state.repair_attempts,
