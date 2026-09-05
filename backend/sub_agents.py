@@ -150,14 +150,18 @@ async def run_hotel_agent(
                 website=r.get("website"),
             )
         )
-    # Rank by star match first, then rating.
-    prefer_stars = prefs.preferred_hotel_rating if prefs else None
-    hotels.sort(
-        key=lambda h: (
-            -abs((prefer_stars or h.star_rating) - h.star_rating),
-            -h.score,
+    # Rank by star match first, then rating. Skip the re-sort when the
+    # caller supplied a specific place_name — Google's text-search order
+    # is relevance-first for named lookups, and re-sorting by rating can
+    # push a same-named place in a different city above the real match.
+    if place_name is None:
+        prefer_stars = prefs.preferred_hotel_rating if prefs else None
+        hotels.sort(
+            key=lambda h: (
+                -abs((prefer_stars or h.star_rating) - h.star_rating),
+                -h.score,
+            )
         )
-    )
     return hotels
 
 
@@ -200,7 +204,9 @@ async def run_restaurant_agent(
                 website=r.get("website"),
             )
         )
-    restaurants.sort(key=lambda x: -x.rating)
+    # Keep Google's relevance order for named lookups (see run_hotel_agent).
+    if place_name is None:
+        restaurants.sort(key=lambda x: -x.rating)
     return restaurants
 
 
@@ -251,7 +257,9 @@ async def run_event_agent(
                 website=r.get("website"),
             )
         )
-    events.sort(key=lambda e: -(float(getattr(e, "cost", 0)) == 0.0) or 0.0)
+    # Keep Google's relevance order for named lookups (see run_hotel_agent).
+    if place_name is None:
+        events.sort(key=lambda e: -(float(getattr(e, "cost", 0)) == 0.0) or 0.0)
     return events
 
 

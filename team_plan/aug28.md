@@ -1,5 +1,4 @@
 issues noted
--  ask the number of travellers
 
 - '''
 user: when can I best visit omars inn kannur for biriyani
