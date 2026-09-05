@@ -1,7 +1,6 @@
 issues noted
-- plan the trip only in the destination
-- never asks the number of travellers
-- never allows the selection of more than one stay 
+- trip is planned only in the destination - it should also enable on the way plans
+-  ask the number of travellers
 
 - '''when can I best visit omars inn kannur for biriyani
 The best time to visit Omars Inn Restaurant in Kannur for biriyani is during dinner hours, which are daily from 12:00 PM to 11:00 PM.
@@ -13,11 +12,9 @@ You can best visit Omars Inn Restaurant in Kannur for biriyani during dinner hou
 the response went wrong in the 2nd try
 
 - - understand how does follow ups work
-- avoid showing the place mentioned by user in input query in the options 
-- REMOVE - place+stay
 
-whats right
-- picks stay based on the sites selected
+
+
 
 
 verify

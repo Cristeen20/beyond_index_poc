@@ -769,6 +769,9 @@ async def propose_stays_for_selection_node(state: PlanningState) -> dict:
         })
     items.sort(key=lambda it: it["rank"])
 
+    # Trips longer than 2 days may split nights across multiple hotels;
+    # shorter trips still lock to a single stay.
+    allow_multi = (trip.num_days or 1) > 2
     has_more = (start + per_page) < len(candidates)
     payload = _items_payload(
         kind="stays",
@@ -777,8 +780,12 @@ async def propose_stays_for_selection_node(state: PlanningState) -> dict:
         items=items,
         page=page,
         has_more=has_more,
-        select="single",  # one stay per trip in this POC
-        hint="Pick a stay, ask a question, or see more.",
+        select="multi" if allow_multi else "single",
+        hint=(
+            "Pick one or more stays, ask a question, or see more."
+            if allow_multi
+            else "Pick a stay, ask a question, or see more."
+        ),
     )
     updates: dict = {
         "options_payload": payload,
