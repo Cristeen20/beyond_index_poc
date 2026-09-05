@@ -499,26 +499,6 @@ def _matches_must_include(name: str, must_include: list[str]) -> bool:
     )
 
 
-def _pin_must_include(candidates: list, must_include: list[str]) -> list:
-    """Move user-named places to the front of the candidate list.
-
-    A 1-day trip only shows 3 places per page, so a place the user asked
-    for by name has to be pinned rather than left to compete with generic
-    attractions on rank — otherwise "plan a day in Sudbury in moonlight
-    beach" proposes three things that aren't Moonlight Beach.
-    """
-    if not must_include:
-        return candidates
-    pinned = [c for c in candidates if _matches_must_include(c.name, must_include)]
-    if not pinned:
-        logger.info("propose_places → must_include %s not found in results",
-                    must_include)
-        return candidates
-    rest = [c for c in candidates if c not in pinned]
-    logger.info("propose_places → pinning %d must-include place(s)", len(pinned))
-    return pinned + rest
-
-
 async def propose_places_node(state: PlanningState) -> dict:
     trip = state.trip_request
     page = state.options_page or 0
@@ -530,10 +510,17 @@ async def propose_places_node(state: PlanningState) -> dict:
         candidates = await run_event_agent(trip, _prefs(state), limit=48)
     else:
         candidates = state.event_options
-    candidates = _pin_must_include(candidates, trip.must_include)
+
+    # Hide places the user already named in their query — they're
+    # auto-included in parse_places_reply. Full candidate list stays in
+    # state.event_options so downstream (fill_missing_agents, itinerary)
+    # can still resolve them by id.
+    must_include = trip.must_include or []
+    visible = [c for c in candidates
+               if not _matches_must_include(c.name, must_include)]
 
     start = page * per_page
-    slice_ = candidates[start:start + per_page]
+    slice_ = visible[start:start + per_page]
     if not slice_:
         logger.info("propose_places_node → page %d empty, offering current picks", page)
         payload = _items_payload(
@@ -565,10 +552,6 @@ async def propose_places_node(state: PlanningState) -> dict:
     items = []
     for e in slice_:
         rank, rationale = ranks.get(e.event_id, (999, ""))
-        # The user asked for this one by name — it outranks the ranker.
-        if _matches_must_include(e.name, trip.must_include):
-            rank = -1
-            rationale = rationale or "You asked to include this."
         items.append({
             "id": e.event_id,
             "name": e.name,
@@ -584,7 +567,7 @@ async def propose_places_node(state: PlanningState) -> dict:
         })
     items.sort(key=lambda it: it["rank"])
 
-    has_more = (start + per_page) < len(candidates)
+    has_more = (start + per_page) < len(visible)
     payload = _items_payload(
         kind="places",
         title=f"Places to visit in {trip.destination}"
@@ -641,9 +624,20 @@ async def parse_places_reply_node(state: PlanningState) -> dict:
         }
 
     ids = action.get("ids") or []
-    logger.info("parse_places_reply_node → selected %d place(s)", len(ids))
+    # Places named in the user's query were hidden from the picker;
+    # fold them back into the selection so they land in the plan.
+    must_include = (state.trip_request.must_include or []) if state.trip_request else []
+    auto_ids = [
+        e.event_id for e in state.event_options
+        if _matches_must_include(e.name, must_include)
+    ]
+    merged_ids = list(dict.fromkeys(ids + auto_ids))
+    logger.info(
+        "parse_places_reply_node → selected %d place(s) (+ %d auto-included)",
+        len(ids), len(auto_ids),
+    )
     updates: dict = {
-        "selected_place_ids": ids,
+        "selected_place_ids": merged_ids,
         "options_payload": None,
         "pending_stage": None,
         "option_action": None,
@@ -659,7 +653,7 @@ async def parse_places_reply_node(state: PlanningState) -> dict:
     if state.planning_scope == "places_only":
         picked = [
             e.name for e in state.event_options
-            if e.event_id in set(ids)
+            if e.event_id in set(merged_ids)
         ]
         updates["response_message"] = (
             f"Saved your {len(picked)} pick(s): {', '.join(picked)}. "
