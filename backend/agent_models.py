@@ -284,6 +284,7 @@ PreStage = Literal[
     "confirm_basics",
     "num_days",
     "num_travelers",
+    "budget",
     "scope",
     "places",
     "stays",
@@ -349,6 +350,8 @@ class PlanningState(BaseModel):
     num_days_confirmed: bool = False
     # Same idea for the traveler-count ask.
     travelers_confirmed: bool = False
+    # Same idea for the budget ask. When True, ask_budget is skipped.
+    budget_confirmed: bool = False
     options_payload: dict | None = None
     selected_place_ids: list[str] = []
     selected_stay_ids: list[str] = []

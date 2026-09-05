@@ -1,18 +1,6 @@
 issues noted
 
-- '''
-user: when can I best visit omars inn kannur for biriyani
-bot: The best time to visit Omars Inn Restaurant in Kannur for biriyani is during dinner hours, which are daily from 12:00 PM to 11:00 PM.
-
-user: when can I best visit omars inn kannur for biriyani
-bot: The search results seem to match Omar Residency in Kochi, not Omar's Inn in Kannur; could you clarify which one you're asking about?
-
-user: when can I best visit omars inn kannur for biriyani
-bot: You can best visit Omars Inn Restaurant in Kannur for biriyani during dinner hours, from 12:00 PM to 11:00 PM daily.
-'''
-the response went wrong in the 2nd try
-
-- - understand how does follow ups work
+- location confusion
 
 
 

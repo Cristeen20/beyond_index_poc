@@ -62,11 +62,13 @@ from graph.nodes_itinerary import (
     run_llm_planner_node,
 )
 from graph.nodes_preplanning import (
+    ask_budget_node,
     ask_num_days_node,
     ask_num_travelers_node,
     confirm_basics_node,
     elicit_scope_node,
     fill_missing_agents_node,
+    parse_budget_node,
     parse_confirm_node,
     parse_num_days_node,
     parse_num_travelers_node,
@@ -75,6 +77,7 @@ from graph.nodes_preplanning import (
     parse_stays_reply_node,
     propose_places_node,
     propose_stays_for_selection_node,
+    route_after_parse_budget,
     route_after_parse_confirm,
     route_after_parse_num_days,
     route_after_parse_num_travelers,
@@ -177,6 +180,8 @@ def _slot_gate_route(state: PlanningState):
         return "ask_num_days"
     if not state.travelers_confirmed:
         return "ask_num_travelers"
+    if not state.budget_confirmed:
+        return "ask_budget"
     return "elicit_scope"
 
 
@@ -243,6 +248,8 @@ def build_travel_graph():
     g.add_node("parse_num_days", parse_num_days_node)
     g.add_node("ask_num_travelers", ask_num_travelers_node)
     g.add_node("parse_num_travelers", parse_num_travelers_node)
+    g.add_node("ask_budget", ask_budget_node)
+    g.add_node("parse_budget", parse_budget_node)
     g.add_node("elicit_scope", elicit_scope_node)
     g.add_node("parse_scope", parse_scope_node)
     g.add_node("propose_places", propose_places_node)
@@ -293,10 +300,11 @@ def build_travel_graph():
         {
             "ask_num_days": "ask_num_days",
             "ask_num_travelers": "ask_num_travelers",
+            "ask_budget": "ask_budget",
             "elicit_scope": "elicit_scope",
         },
     )
-    # ask_num_days → wait → parse_num_days → ask_num_travelers | elicit_scope
+    # ask_num_days → wait → parse_num_days → next sticky ask or elicit_scope
     g.add_edge("ask_num_days", "wait_for_next_message")
     g.add_conditional_edges(
         "parse_num_days",
@@ -304,14 +312,26 @@ def build_travel_graph():
         {
             "wait_for_next_message": "wait_for_next_message",
             "ask_num_travelers": "ask_num_travelers",
+            "ask_budget": "ask_budget",
             "elicit_scope": "elicit_scope",
         },
     )
-    # ask_num_travelers → wait → parse_num_travelers → elicit_scope (or stay)
+    # ask_num_travelers → wait → parse_num_travelers → next sticky or elicit_scope
     g.add_edge("ask_num_travelers", "wait_for_next_message")
     g.add_conditional_edges(
         "parse_num_travelers",
         route_after_parse_num_travelers,
+        {
+            "wait_for_next_message": "wait_for_next_message",
+            "ask_budget": "ask_budget",
+            "elicit_scope": "elicit_scope",
+        },
+    )
+    # ask_budget → wait → parse_budget → elicit_scope (or stay if question)
+    g.add_edge("ask_budget", "wait_for_next_message")
+    g.add_conditional_edges(
+        "parse_budget",
+        route_after_parse_budget,
         {
             "wait_for_next_message": "wait_for_next_message",
             "elicit_scope": "elicit_scope",
@@ -371,6 +391,7 @@ def build_travel_graph():
             "parse_confirm": "parse_confirm",
             "parse_num_days": "parse_num_days",
             "parse_num_travelers": "parse_num_travelers",
+            "parse_budget": "parse_budget",
             "parse_scope": "parse_scope",
             "parse_places_reply": "parse_places_reply",
             "parse_stays_reply": "parse_stays_reply",

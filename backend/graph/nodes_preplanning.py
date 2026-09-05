@@ -143,6 +143,31 @@ def _num_travelers_payload(current: int) -> dict:
     }
 
 
+def _budget_payload(current: float, currency: str) -> dict:
+    sym = "$" if (currency or "USD").upper() == "USD" else currency
+    return {
+        "kind": "budget",
+        "title": "What's your total budget?",
+        "description": (
+            "Pick a total budget (stays, activities, food, transport). "
+            "This mainly shapes stay picks; typing 0 or 'skip' means no cap."
+        ),
+        "items": [],
+        "actions": [
+            {"id": "500",  "label": f"{sym}500"},
+            {"id": "1000", "label": f"{sym}1,000"},
+            {"id": "2000", "label": f"{sym}2,000"},
+            {"id": "3000", "label": f"{sym}3,000"},
+            {"id": "5000", "label": f"{sym}5,000"},
+            {"id": "skip", "label": "Skip / no cap"},
+        ],
+        "select": "none",
+        "page": 0,
+        "has_more": False,
+        "meta": {"current": current, "currency": currency or "USD"},
+    }
+
+
 def _scope_payload() -> dict:
     return {
         "kind": "scope",
@@ -204,12 +229,15 @@ _PLACES_RANKER_SYSTEM = (
 
 _STAYS_RANKER_SYSTEM = (
     "You are ranking candidate hotels for a traveler who has already picked "
-    "the places they want to visit. For each hotel, write a ONE-sentence "
-    "rationale that emphasises TRAVEL-TIME impact — roughly how close it is "
-    "to the selected places and how much daily commuting it saves versus a "
-    "generic central hotel. Use approximate minutes if you can ("
-    "'~10 min to X, ~15 min to Y'). Return JSON: "
-    "{\"ranked\": [{\"id\": str, \"rank\": int, \"rationale\": str}, ...]}. "
+    "the places they want to visit. When a `per_night_budget` is provided, "
+    "BUDGET FIT is the primary signal — put hotels whose price_per_night is "
+    "at or under the cap first, and demote (do not exclude) those above it. "
+    "Within each budget bucket, prefer stays that shorten daily commutes to "
+    "the selected places. Write a ONE-sentence rationale that mentions the "
+    "budget fit (e.g. '$140/night, within $200 cap') and travel-time impact "
+    "('~10 min to X, ~15 min to Y'). When no per_night_budget is provided, "
+    "rank on travel-time only. "
+    "Return JSON: {\"ranked\": [{\"id\": str, \"rank\": int, \"rationale\": str}, ...]}. "
     "Include EVERY input hotel id exactly once."
 )
 
@@ -507,6 +535,120 @@ async def parse_num_travelers_node(state: PlanningState) -> dict:
 
 
 # --------------------------------------------------------------------------- #
+# Stage 2c — ask total budget
+# --------------------------------------------------------------------------- #
+
+
+def ask_budget_node(state: PlanningState) -> dict:
+    """Ask the user for their total budget before scope selection.
+
+    Sticky like the other pre-planning asks — once budget_confirmed is
+    True this doesn't re-fire. A 0 value (or "skip") means "no cap" and
+    downstream code treats total_budget=0 as unconstrained.
+    """
+    trip = state.trip_request
+    current = float(getattr(trip, "total_budget", 0.0) or 0.0) if trip else 0.0
+    currency = (getattr(trip, "currency", "USD") or "USD") if trip else "USD"
+    payload = _budget_payload(current, currency)
+    logger.info("ask_budget_node → asking (current default=%.0f %s)", current, currency)
+    return {
+        "options_payload": payload,
+        "pending_stage": "budget",
+        "phase": "pre_planning",
+        "response_message": payload["title"],
+    }
+
+
+def _extract_budget(action: dict) -> float | None:
+    """Pull a non-negative budget number out of the action.
+
+    Returns 0.0 for the explicit "skip" button or a "skip"/"no"/"none"
+    free-text reply — the caller treats 0 as "no cap". Returns None when
+    nothing parses so the card stays up.
+    """
+    ids = action.get("ids") or []
+    if ids:
+        raw = str(ids[0]).strip().lower()
+        if raw in {"skip", "none", "no", "0"}:
+            return 0.0
+        try:
+            n = float(raw.replace(",", "").replace("$", ""))
+            if n >= 0:
+                return n
+        except (TypeError, ValueError):
+            pass
+
+    text = (action.get("text") or "").strip().lower()
+    if not text:
+        return None
+    if text in {"skip", "none", "no cap", "no", "0"}:
+        return 0.0
+    import re
+    m = re.search(r"[\d,]+(?:\.\d+)?", text)
+    if m:
+        try:
+            n = float(m.group(0).replace(",", ""))
+            if n >= 0:
+                # "5k" → 5000, "2m" → 2_000_000. Only k/m suffixes.
+                if "k" in text:
+                    n *= 1000
+                elif "m" in text:
+                    n *= 1_000_000
+                return n
+        except ValueError:
+            pass
+    return None
+
+
+async def parse_budget_node(state: PlanningState) -> dict:
+    """Parse the reply to the ask_budget card.
+
+    Accepts numeric button ids ("1000"), free text ("$3k", "2000"),
+    or a skip signal ("skip", explicit 0). Updates trip.total_budget
+    in-place and flips budget_confirmed True.
+    """
+    action = await _resolve_action(state)
+    kind = action.get("action")
+
+    if kind == "question":
+        answer = await _answer_over_card(
+            question=action.get("text") or state.incoming_message,
+            payload=state.options_payload or {},
+        )
+        return {"response_message": answer, "option_action": None}
+
+    n = _extract_budget(action)
+    if n is None:
+        logger.info("parse_budget_node → could not parse %r", action)
+        return {
+            "response_message": (
+                "I couldn't read a budget from that. Tap one of the options, "
+                "type a number like '2000', or say 'skip'."
+            ),
+            "option_action": None,
+        }
+
+    trip = state.trip_request
+    if trip is None:
+        logger.warning("parse_budget_node → no trip_request; skipping update")
+        return {
+            "options_payload": None,
+            "pending_stage": None,
+            "option_action": None,
+        }
+
+    updated = trip.model_copy(update={"total_budget": n})
+    logger.info("parse_budget_node → total_budget=%.0f", n)
+    return {
+        "trip_request": updated,
+        "budget_confirmed": True,
+        "options_payload": None,
+        "pending_stage": None,
+        "option_action": None,
+    }
+
+
+# --------------------------------------------------------------------------- #
 # Stage 2 — elicit scope
 # --------------------------------------------------------------------------- #
 
@@ -795,6 +937,25 @@ async def propose_stays_for_selection_node(state: PlanningState) -> dict:
     else:
         candidates = state.hotel_options
 
+    # Per-night accommodation budget: total * 30% ratio / nights.
+    # Match _STYLE_RATIOS["balanced"]["accommodation"] in itinerary_agent.py.
+    # 0 = no cap; nights defaulted to num_days (approximation; the planner
+    # later uses num_days-1 for a round-trip but per-picker this is fine).
+    per_night_cap = 0.0
+    if trip.total_budget and trip.num_days:
+        per_night_cap = (trip.total_budget * 0.30) / max(trip.num_days, 1)
+    # Drop hotels priced more than 2× the cap outright — they can't fit
+    # even with generous rebalancing between food/activities.
+    if per_night_cap > 0:
+        before = len(candidates)
+        candidates = [h for h in candidates
+                      if not h.price_per_night or h.price_per_night <= per_night_cap * 2]
+        if len(candidates) < before:
+            logger.info(
+                "propose_stays → dropped %d hotel(s) priced >2x cap $%.0f/night",
+                before - len(candidates), per_night_cap,
+            )
+
     selected_places = [e for e in state.event_options
                        if e.event_id in set(state.selected_place_ids)]
     centroid = _centroid([(e.latitude, e.longitude) for e in selected_places])
@@ -840,10 +1001,16 @@ async def propose_stays_for_selection_node(state: PlanningState) -> dict:
          ]}
         for h in slice_
     ]
+    budget_line = (
+        f" per_night_budget: ${per_night_cap:.0f} (from total ${trip.total_budget:.0f})."
+        if per_night_cap > 0
+        else " No per_night_budget set — rank on travel-time only."
+    )
     context = (
         f"Selected places for this trip: "
         f"{', '.join(e.name for e in selected_places) or '(none — pick any)'}. "
         f"Trip: {trip.num_days} day(s) in {trip.destination}."
+        + budget_line
     )
     ranks = await _rank_items_llm(_STAYS_RANKER_SYSTEM, context, items_json)
 
@@ -1140,6 +1307,8 @@ def route_after_wait(state: PlanningState) -> str:
         return "parse_num_days"
     if stage == "num_travelers":
         return "parse_num_travelers"
+    if stage == "budget":
+        return "parse_budget"
     if stage == "scope":
         return "parse_scope"
     if stage == "places":
@@ -1157,23 +1326,33 @@ def route_after_parse_confirm(state: PlanningState) -> str:
         return "ask_num_days"
     if not state.travelers_confirmed:
         return "ask_num_travelers"
+    if not state.budget_confirmed:
+        return "ask_budget"
     return "elicit_scope"
 
 
 def route_after_parse_num_days(state: PlanningState) -> str:
-    """After the num_days card:
-    - options_payload still set → we answered a question; keep the card up
-    - otherwise → advance to ask_num_travelers or elicit_scope (sticky).
-    """
+    """After the num_days card, walk the remaining sticky asks."""
     if state.options_payload is not None:
         return "wait_for_next_message"
     if not state.travelers_confirmed:
         return "ask_num_travelers"
+    if not state.budget_confirmed:
+        return "ask_budget"
     return "elicit_scope"
 
 
 def route_after_parse_num_travelers(state: PlanningState) -> str:
-    """After the num_travelers card:
+    """After the num_travelers card, walk the remaining sticky asks."""
+    if state.options_payload is not None:
+        return "wait_for_next_message"
+    if not state.budget_confirmed:
+        return "ask_budget"
+    return "elicit_scope"
+
+
+def route_after_parse_budget(state: PlanningState) -> str:
+    """After the budget card:
     - options_payload still set → question was answered, keep card up
     - otherwise → advance to elicit_scope
     """

@@ -19,7 +19,8 @@ export default function OptionsCard({ payload, onAction, disabled }: Props) {
   const isItemCard = payload.kind === 'places' || payload.kind === 'stays'
   const isNumDaysCard = payload.kind === 'num_days'
   const isNumTravelersCard = payload.kind === 'num_travelers'
-  const isNumericCard = isNumDaysCard || isNumTravelersCard
+  const isBudgetCard = payload.kind === 'budget'
+  const isNumericCard = isNumDaysCard || isNumTravelersCard || isBudgetCard
 
   function toggle(id: string) {
     setSelected((prev) => {
@@ -194,7 +195,9 @@ export default function OptionsCard({ payload, onAction, disabled }: Props) {
               type="number"
               min={1}
               placeholder={
-                isNumTravelersCard
+                isBudgetCard
+                  ? 'Or type a total budget (e.g. 2000)…'
+                  : isNumTravelersCard
                   ? 'Or type a number of travelers…'
                   : 'Or type a number of days…'
               }

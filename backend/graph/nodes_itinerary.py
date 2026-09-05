@@ -122,6 +122,8 @@ def _hotels_by_id(state: PlanningState):
 
 
 def check_conflicts_node(state: PlanningState) -> dict:
+    from itinerary_agent import _compute_total_cost
+
     days = _hydrate_days(state.draft_itinerary.get("days", []), _hotels_by_id(state))
     notes = resolve_conflicts(days, state.budget)
 
@@ -138,6 +140,18 @@ def check_conflicts_node(state: PlanningState) -> dict:
                 f"Selected stays not used on any night: {', '.join(missing)}. "
                 "Split the trip's nights across ALL provided hotels — every "
                 "picked hotel must appear at least once."
+            )
+
+    # Recheck actual total (transport + nightly rates + segment costs) against
+    # the user's target. Trigger repair when >10% over — parallels the
+    # existing food / activities checks in resolve_conflicts.
+    target = float(state.budget.total or 0.0) if state.budget else 0.0
+    if target > 0:
+        actual = _compute_total_cost(days, state.budget)
+        if actual > target * 1.10:
+            notes.append(
+                f"Estimated total ${actual:.0f} exceeds target ${target:.0f}. "
+                "Swap in cheaper stays or trim paid activities/meals to fit."
             )
 
     logger.info(
@@ -193,14 +207,34 @@ def assemble_itinerary_node(state: PlanningState) -> dict:
     raw = state.draft_itinerary or {}
     days = _hydrate_days(raw.get("days", []), _hotels_by_id(state))
     trip = state.trip_request
+    actual_total = _compute_total_cost(days, state.budget)
+
+    # Surface the actual computed cost against the user's target so they can
+    # see whether the plan fits. Skip when total_budget is 0 (no cap).
+    extra_notes: list[str] = []
+    target = float(state.budget.total or 0.0) if state.budget else 0.0
+    if target > 0:
+        delta = actual_total - target
+        pct = (delta / target) * 100 if target else 0
+        if delta > 0:
+            extra_notes.append(
+                f"Estimated total: ${actual_total:.0f} (target ${target:.0f}, "
+                f"over by ${delta:.0f} / {pct:+.0f}%)."
+            )
+        else:
+            extra_notes.append(
+                f"Estimated total: ${actual_total:.0f} (target ${target:.0f}, "
+                f"under by ${-delta:.0f})."
+            )
+
     itinerary = Itinerary(
         trip_id=str(uuid.uuid4()),
         user_id=(state.user_profile.user_id if state.user_profile else "anonymous"),
         title=raw.get("title") or f"{trip.num_days}-day trip to {trip.destination}",
         days=days,
-        total_cost=_compute_total_cost(days, state.budget),
+        total_cost=actual_total,
         budget_breakdown=state.budget,
-        notes=(raw.get("notes") or []) + state.conflict_notes,
+        notes=(raw.get("notes") or []) + state.conflict_notes + extra_notes,
         created_at=datetime.utcnow(),
         version=1,
     )
@@ -208,6 +242,8 @@ def assemble_itinerary_node(state: PlanningState) -> dict:
         f"Here's your {itinerary.days[0].date}–{itinerary.days[-1].date} "
         f"itinerary for {trip.destination}."
     )
+    if extra_notes:
+        summary += " " + extra_notes[0]
     logger.info(
         "assemble_itinerary → v%d days=%d total=$%.0f",
         itinerary.version, len(itinerary.days), itinerary.total_cost,

@@ -374,10 +374,11 @@ def hydrate_trip(state: PlanningState) -> dict:
             "followup_question": None,
             "revision_feedback": None,
             # New trip — the previous trip's confirmed length / party size
-            # says nothing about this one, so let the asks fire again
-            # unless this turn's message carried explicit values.
+            # / budget says nothing about this one, so let the asks fire
+            # again unless this turn's message carried explicit values.
             "num_days_confirmed": False,
             "travelers_confirmed": False,
+            "budget_confirmed": False,
         })
 
     # The user already told us how long ("a 1 day trip", or a real date
@@ -399,6 +400,14 @@ def hydrate_trip(state: PlanningState) -> dict:
             trip.travelers,
         )
         updates["travelers_confirmed"] = True
+    # Same for budget: any explicit budget slot (including 0 = "no cap")
+    # skips the ask.
+    if slots.get("budget") is not None:
+        logger.info(
+            "hydrate_trip: explicit budget (%.0f) — skipping ask_budget",
+            trip.total_budget,
+        )
+        updates["budget_confirmed"] = True
 
     return updates
 
