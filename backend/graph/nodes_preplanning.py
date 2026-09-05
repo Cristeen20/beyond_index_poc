@@ -57,7 +57,7 @@ def _prefs(state: PlanningState):
 # --------------------------------------------------------------------------- #
 
 
-def _confirm_basics_payload(trip) -> dict:
+def _confirm_basics_payload(trip, show_travelers: bool = False) -> dict:
     # Origin is optional (FULL_OPTIONAL_SLOTS) — a local day out has no
     # journey, and _hydrate_trip_request leaves the placeholder "Unknown"
     # behind. Say "Trip to X" rather than showing the placeholder.
@@ -67,17 +67,19 @@ def _confirm_basics_payload(trip) -> dict:
         else f"Trip to {trip.destination}"
     )
 
-    # Dates only appear here when the user actually provided them.
-    # Otherwise we defer to the ask_num_days step and just show the lead +
-    # travelers.
+    parts = [lead]
+    # Dates only appear when the user actually provided them; otherwise we
+    # defer to the ask_num_days step.
     if trip.start_date and trip.end_date:
-        window = f"{trip.start_date} → {trip.end_date}"
-        description = (
-            f"{lead}, {trip.num_days} day(s) ({window}), "
-            f"{trip.travelers} traveler(s)."
+        parts.append(
+            f"{trip.num_days} day(s) ({trip.start_date} → {trip.end_date})"
         )
-    else:
-        description = f"{lead}, {trip.travelers} traveler(s)."
+    # Same for travelers: only echo the count when we're going to skip the
+    # ask (i.e. the user gave us a number). Otherwise showing "1
+    # traveler(s)" looks like a decision we've made for them.
+    if show_travelers:
+        parts.append(f"{trip.travelers} traveler(s)")
+    description = ", ".join(parts) + "."
 
     if trip.must_include:
         description += f" Including {', '.join(trip.must_include)}."
@@ -274,7 +276,7 @@ def confirm_basics_node(state: PlanningState) -> dict:
     don't ask twice within the same trip.
     """
     trip = state.trip_request
-    payload = _confirm_basics_payload(trip)
+    payload = _confirm_basics_payload(trip, show_travelers=state.travelers_confirmed)
     logger.info("confirm_basics_node → asking to confirm %s→%s (%d days)",
                 trip.origin, trip.destination, trip.num_days)
     return {

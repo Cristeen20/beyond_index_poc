@@ -373,10 +373,11 @@ def hydrate_trip(state: PlanningState) -> dict:
             "missing_slots": [],
             "followup_question": None,
             "revision_feedback": None,
-            # New trip — the previous trip's confirmed length says nothing
-            # about this one, so let ask_num_days fire again unless this
-            # turn's message carried an explicit length.
+            # New trip — the previous trip's confirmed length / party size
+            # says nothing about this one, so let the asks fire again
+            # unless this turn's message carried explicit values.
             "num_days_confirmed": False,
+            "travelers_confirmed": False,
         })
 
     # The user already told us how long ("a 1 day trip", or a real date
@@ -391,6 +392,13 @@ def hydrate_trip(state: PlanningState) -> dict:
             trip.num_days,
         )
         updates["num_days_confirmed"] = True
+    # Same for travelers: skip the ask when the user mentioned it.
+    if slots.get("travelers"):
+        logger.info(
+            "hydrate_trip: explicit travelers (%d) — skipping ask_num_travelers",
+            trip.travelers,
+        )
+        updates["travelers_confirmed"] = True
 
     return updates
 
