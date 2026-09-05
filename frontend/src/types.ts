@@ -72,7 +72,7 @@ export interface OptionsPayloadAction {
 }
 
 export interface OptionsPayload {
-  kind: 'confirm_basics' | 'num_days' | 'scope' | 'places' | 'stays' | 'day_by_day'
+  kind: 'confirm_basics' | 'num_days' | 'scope' | 'places' | 'stays'
   title: string
   description?: string
   items: OptionsPayloadItem[]

@@ -31,8 +31,8 @@ to a single subgraph → post_dispatch → merge_direct / answer_from_places.
    │            │   direct    from_places   [pre-planning chain]   │
    │            │        │       │                    │            │
    │            │        │       │      elicit_scope→propose_places│
-   │            │        │       │      →propose_stays→ask_day_by_ │
-   │            │        │       │      day→fill_missing_agents→   │
+   │            │        │       │      →propose_stays→            │
+   │            │        │       │      fill_missing_agents→       │
    │            │        │       │      itinerary_planning         │
    │            │        │       │                    │            │
    └────────────┴────────┴───────┴────────────────────┴────────────┤
@@ -62,13 +62,11 @@ from graph.nodes_itinerary import (
     run_llm_planner_node,
 )
 from graph.nodes_preplanning import (
-    ask_day_by_day_node,
     ask_num_days_node,
     confirm_basics_node,
     elicit_scope_node,
     fill_missing_agents_node,
     parse_confirm_node,
-    parse_daybyday_node,
     parse_num_days_node,
     parse_places_reply_node,
     parse_scope_node,
@@ -76,7 +74,6 @@ from graph.nodes_preplanning import (
     propose_places_node,
     propose_stays_for_selection_node,
     route_after_parse_confirm,
-    route_after_parse_daybyday,
     route_after_parse_num_days,
     route_after_parse_places,
     route_after_parse_scope,
@@ -245,8 +242,6 @@ def build_travel_graph():
     g.add_node("parse_places_reply", parse_places_reply_node)
     g.add_node("propose_stays_for_selection", propose_stays_for_selection_node)
     g.add_node("parse_stays_reply", parse_stays_reply_node)
-    g.add_node("ask_day_by_day", ask_day_by_day_node)
-    g.add_node("parse_daybyday", parse_daybyday_node)
     g.add_node("fill_missing_agents", fill_missing_agents_node)
 
     # Loop-back node — interrupts and awaits the next user message
@@ -323,7 +318,7 @@ def build_travel_graph():
         },
     )
     # propose_stays_for_selection → wait → parse_stays_reply → {wait|
-    # propose_stays_for_selection|ask_day_by_day|fill_missing_agents}
+    # propose_stays_for_selection|fill_missing_agents}
     g.add_edge("propose_stays_for_selection", "wait_for_next_message")
     g.add_conditional_edges(
         "parse_stays_reply",
@@ -331,17 +326,6 @@ def build_travel_graph():
         {
             "wait_for_next_message": "wait_for_next_message",
             "propose_stays_for_selection": "propose_stays_for_selection",
-            "ask_day_by_day": "ask_day_by_day",
-            "fill_missing_agents": "fill_missing_agents",
-        },
-    )
-    # ask_day_by_day → wait → parse_daybyday → {wait|fill_missing_agents}
-    g.add_edge("ask_day_by_day", "wait_for_next_message")
-    g.add_conditional_edges(
-        "parse_daybyday",
-        route_after_parse_daybyday,
-        {
-            "wait_for_next_message": "wait_for_next_message",
             "fill_missing_agents": "fill_missing_agents",
         },
     )
@@ -370,7 +354,6 @@ def build_travel_graph():
             "parse_scope": "parse_scope",
             "parse_places_reply": "parse_places_reply",
             "parse_stays_reply": "parse_stays_reply",
-            "parse_daybyday": "parse_daybyday",
         },
     )
 

@@ -4,7 +4,7 @@ Sits between `check_slot_gate` and the existing `itinerary_planning` subgraph
 on the FULL route. Walks the user through:
 
   confirm_basics → elicit_scope → propose_places → propose_stays_for_selection
-  → ask_day_by_day → itinerary_planning
+  → itinerary_planning
 
 Each "propose_*" or "elicit_*" node writes a structured `options_payload`
 to state and edges into `wait_for_next_message`. The next turn arrives with
@@ -127,28 +127,8 @@ def _scope_payload() -> dict:
         ),
         "items": [],
         "actions": [
-            {"id": "places_only",       "label": "Just show me places"},
-            {"id": "places_and_stays",  "label": "Places + stays"},
-            {"id": "day_by_day",        "label": "Full day-by-day itinerary"},
-        ],
-        "select": "none",
-        "page": 0,
-        "has_more": False,
-    }
-
-
-def _day_by_day_payload() -> dict:
-    return {
-        "kind": "day_by_day",
-        "title": "Build the day-by-day now?",
-        "description": (
-            "I'll take your picks and lay out a day-by-day plan with times, "
-            "meals, and travel between them."
-        ),
-        "items": [],
-        "actions": [
-            {"id": "yes", "label": "Yes, build the day-by-day"},
-            {"id": "no",  "label": "No, I'm good with these picks"},
+            {"id": "places_only",  "label": "Just show me places"},
+            {"id": "day_by_day",   "label": "Full day-by-day itinerary"},
         ],
         "select": "none",
         "page": 0,
@@ -449,9 +429,9 @@ def elicit_scope_node(state: PlanningState) -> dict:
 async def parse_scope_node(state: PlanningState) -> dict:
     """Parse the reply to the scope card.
 
-    Buttons carry the scope id in `ids[0]` (places_only / places_and_stays /
-    day_by_day). Free-text asking about the scopes is answered without
-    finalising — the card stays up. Only a clear scope pick advances.
+    Buttons carry the scope id in `ids[0]` (places_only / day_by_day).
+    Free-text asking about the scopes is answered without finalising —
+    the card stays up. Only a clear scope pick advances.
     """
     action = await _resolve_action(state)
     kind = action.get("action")
@@ -472,12 +452,10 @@ async def parse_scope_node(state: PlanningState) -> dict:
     elif kind == "confirm":
         scope_id = (action.get("text") or "").lower().strip()
 
-    if scope_id in ("places_only", "places_and_stays", "day_by_day"):
+    if scope_id in ("places_only", "day_by_day"):
         scope = scope_id
     elif "day" in scope_id or "itinerary" in scope_id or "full" in scope_id:
         scope = "day_by_day"
-    elif "stay" in scope_id or "hotel" in scope_id or "plus" in scope_id:
-        scope = "places_and_stays"
     elif "place" in scope_id or "just" in scope_id or "only" in scope_id:
         scope = "places_only"
     else:
@@ -916,59 +894,6 @@ async def fill_missing_agents_node(state: PlanningState) -> dict:
 
 
 # --------------------------------------------------------------------------- #
-# Stage 5 — ask day-by-day (upsell for places+stays)
-# --------------------------------------------------------------------------- #
-
-
-def ask_day_by_day_node(state: PlanningState) -> dict:
-    payload = _day_by_day_payload()
-    return {
-        "options_payload": payload,
-        "pending_stage": "day_by_day",
-        "phase": "pre_planning",
-        "response_message": payload["title"],
-    }
-
-
-async def parse_daybyday_node(state: PlanningState) -> dict:
-    """Parse the reply to the day-by-day upsell card.
-
-    Buttons: id="yes" or id="no". Free-text "yes/no/yeah/nope" also works.
-    Any other free-text question keeps the card up with an LLM answer.
-    """
-    action = await _resolve_action(state)
-    kind = action.get("action")
-
-    if kind == "question":
-        answer = await _answer_over_card(
-            question=action.get("text") or state.incoming_message,
-            payload=state.options_payload or {},
-        )
-        return {"response_message": answer, "option_action": None}
-
-    ids = {i.lower() for i in (action.get("ids") or [])}
-    text = (action.get("text") or "").lower().strip()
-
-    said_no = "no" in ids or text in {"no", "nope", "nah"}
-    said_yes = "yes" in ids or text in {"yes", "yeah", "yep", "sure", "ok"}
-    build = said_yes and not said_no
-
-    logger.info("parse_daybyday_node → build=%s (ids=%s text=%r)",
-                build, ids, text)
-    updates: dict = {
-        "options_payload": None,
-        "pending_stage": None,
-        "option_action": None,
-    }
-    if not build:
-        updates["response_message"] = (
-            "All set — here are your picks. Ask any time if you want the "
-            "day-by-day."
-        )
-    return updates
-
-
-# --------------------------------------------------------------------------- #
 # Helpers — action resolution + free-text answering
 # --------------------------------------------------------------------------- #
 
@@ -1047,7 +972,7 @@ async def _answer_over_card(question: str, payload: dict) -> str:
     """Answer a free-text question asked while a button-only card is up.
 
     Keeps the card visible; the user still has to click a button to
-    advance. Used by parse_confirm / parse_scope / parse_daybyday.
+    advance. Used by parse_confirm / parse_scope.
     """
     if not question:
         return "Pick one of the options above to continue."
@@ -1122,8 +1047,6 @@ def route_after_wait(state: PlanningState) -> str:
         return "parse_places_reply"
     if stage == "stays":
         return "parse_stays_reply"
-    if stage == "day_by_day":
-        return "parse_daybyday"
     return "intent_decision"
 
 
@@ -1167,15 +1090,4 @@ def route_after_parse_stays(state: PlanningState) -> str:
         return "wait_for_next_message"
     if state.pending_stage == "stays":
         return "propose_stays_for_selection"
-    if state.planning_scope == "day_by_day":
-        return "fill_missing_agents"
-    return "ask_day_by_day"
-
-
-def route_after_parse_daybyday(state: PlanningState) -> str:
-    # If parse cleared payload with a "no" answer, response_message is set
-    # and we just wait. If build=yes, response_message is empty and we run
-    # the planner (via fill_missing_agents to top up route + restaurant).
-    if state.response_message:
-        return "wait_for_next_message"
     return "fill_missing_agents"

@@ -39,7 +39,7 @@ hydrate_trip → check_slot_gate
 confirm_basics ────interrupt──── user confirms | corrects
    │ (confirmed)
    ▼
-elicit_scope ──────interrupt──── button: [Places] [Places+Stays] [Day-by-Day]
+elicit_scope ──────interrupt──── button: [Places] [Day-by-Day]
    │
    ▼
 propose_places (fetch via event_sub + LLM ranker, page 0)
@@ -53,7 +53,7 @@ present_options ───interrupt──── user: select ids | "more" | free-
    └─ select   → record selected_place_ids
                     │
                     ├─ scope=places_only → END (upsell "Want stays too?")
-                    └─ scope ∈ {places+stays, day_by_day}
+                    └─ scope=day_by_day
                           ▼
                     propose_stays_for_selection (hotel_sub biased by coords + ranker)
                           │
@@ -63,10 +63,7 @@ present_options ───interrupt──── user: select ids | "more" | free-
                           ▼ parse_options_reply (stays)
                           └─ select → record selected_stay_ids
                                 │
-                                ├─ scope=places+stays → ask_day_by_day (button)
-                                │      ├─ Yes → itinerary_planning (unchanged)
-                                │      └─ No  → END
-                                └─ scope=day_by_day  → itinerary_planning (unchanged)
+                                └─ itinerary_planning (unchanged)
 ```
 
 `itinerary_planning` is the existing subgraph
@@ -76,10 +73,10 @@ selections via new state fields and can prefer them when composing days.
 ## State Additions (PlanningState)
 
 ```python
-planning_scope: Literal["places_only", "places_and_stays", "day_by_day"] | None
+planning_scope: Literal["places_only", "day_by_day"] | None
 basics_confirmed: bool = False
 options_payload: dict | None = None
-   # {kind: "confirm_basics" | "scope" | "places" | "stays" | "day_by_day",
+   # {kind: "confirm_basics" | "scope" | "places" | "stays",
    #  title, description, items: [{id, name, rank, rationale, meta}],
    #  actions: [{id, label}], select: "single" | "multi" | "none",
    #  page: int, has_more: bool}
@@ -87,7 +84,7 @@ selected_place_ids: list[str] = []
 selected_stay_ids: list[str] = []
 options_page: int = 0
 pending_stage: Literal[
-    "confirm_basics", "scope", "places", "stays", "day_by_day"
+    "confirm_basics", "scope", "places", "stays"
 ] | None = None
 ```
 
@@ -126,8 +123,8 @@ of the card.
 
 - Renders `options_payload.items` as cards (`kind="places" | "stays"`) with
   rank, name, rationale, and a checkbox (or radio for `select="single"`).
-- Renders `options_payload.actions` as buttons for the confirm/scope/yesno
-  stages (`kind="confirm_basics" | "scope" | "day_by_day"`).
+- Renders `options_payload.actions` as buttons for the confirm/scope
+  stages (`kind="confirm_basics" | "scope"`).
 - Submit button posts a `PlanRequest` with `option_action.action="select"`
   and the checked ids.
 - Free-typing still works — the input form remains active and sends

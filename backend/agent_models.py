@@ -286,11 +286,10 @@ PreStage = Literal[
     "scope",
     "places",
     "stays",
-    "day_by_day",
 ]
 
 
-PlanningScope = Literal["places_only", "places_and_stays", "day_by_day"]
+PlanningScope = Literal["places_only", "day_by_day"]
 
 
 class PlanningState(BaseModel):
