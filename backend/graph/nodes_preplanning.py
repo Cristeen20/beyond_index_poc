@@ -118,6 +118,29 @@ def _num_days_payload(current: int) -> dict:
     }
 
 
+def _num_travelers_payload(current: int) -> dict:
+    return {
+        "kind": "num_travelers",
+        "title": "How many travelers?",
+        "description": (
+            "Pick the number of travelers, or type a custom count."
+        ),
+        "items": [],
+        "actions": [
+            {"id": "1", "label": "Solo"},
+            {"id": "2", "label": "2 people"},
+            {"id": "3", "label": "3 people"},
+            {"id": "4", "label": "4 people"},
+            {"id": "5", "label": "5 people"},
+            {"id": "6", "label": "6+ people"},
+        ],
+        "select": "none",
+        "page": 0,
+        "has_more": False,
+        "meta": {"current": current},
+    }
+
+
 def _scope_payload() -> dict:
     return {
         "kind": "scope",
@@ -404,6 +427,77 @@ async def parse_num_days_node(state: PlanningState) -> dict:
     return {
         "trip_request": updated,
         "num_days_confirmed": True,
+        "options_payload": None,
+        "pending_stage": None,
+        "option_action": None,
+    }
+
+
+# --------------------------------------------------------------------------- #
+# Stage 2b — ask number of travelers
+# --------------------------------------------------------------------------- #
+
+
+def ask_num_travelers_node(state: PlanningState) -> dict:
+    """Ask the user to confirm the traveler count before scope selection.
+
+    Sticky like ask_num_days: fires once per session, then travelers_confirmed
+    keeps it out of the way. The classifier's default (1) is passed through
+    in `meta.current` so the frontend can highlight it.
+    """
+    trip = state.trip_request
+    current = max(getattr(trip, "travelers", 1) or 1, 1) if trip else 1
+    payload = _num_travelers_payload(current)
+    logger.info("ask_num_travelers_node → asking (current default=%d)", current)
+    return {
+        "options_payload": payload,
+        "pending_stage": "num_travelers",
+        "phase": "pre_planning",
+        "response_message": payload["title"],
+    }
+
+
+async def parse_num_travelers_node(state: PlanningState) -> dict:
+    """Parse the reply to the ask_num_travelers card.
+
+    Reuses _extract_num_days — the extraction logic (button id first,
+    then a positive int scraped from free text) is the same shape.
+    """
+    action = await _resolve_action(state)
+    kind = action.get("action")
+
+    if kind == "question":
+        answer = await _answer_over_card(
+            question=action.get("text") or state.incoming_message,
+            payload=state.options_payload or {},
+        )
+        return {"response_message": answer, "option_action": None}
+
+    n = _extract_num_days(action)
+    if n is None:
+        logger.info("parse_num_travelers_node → could not parse %r", action)
+        return {
+            "response_message": (
+                "I couldn't read a number of travelers from that. "
+                "Tap one of the options or type a number like '2'."
+            ),
+            "option_action": None,
+        }
+
+    trip = state.trip_request
+    if trip is None:
+        logger.warning("parse_num_travelers_node → no trip_request; skipping update")
+        return {
+            "options_payload": None,
+            "pending_stage": None,
+            "option_action": None,
+        }
+
+    updated = trip.model_copy(update={"travelers": n})
+    logger.info("parse_num_travelers_node → travelers=%d", n)
+    return {
+        "trip_request": updated,
+        "travelers_confirmed": True,
         "options_payload": None,
         "pending_stage": None,
         "option_action": None,
@@ -1042,6 +1136,8 @@ def route_after_wait(state: PlanningState) -> str:
         return "parse_confirm"
     if stage == "num_days":
         return "parse_num_days"
+    if stage == "num_travelers":
+        return "parse_num_travelers"
     if stage == "scope":
         return "parse_scope"
     if stage == "places":
@@ -1053,13 +1149,30 @@ def route_after_wait(state: PlanningState) -> str:
 
 def route_after_parse_confirm(state: PlanningState) -> str:
     # parse_confirm always sets basics_confirmed=True (there's no
-    # "Change" button anymore). Skip re-asking num_days once answered.
-    return "elicit_scope" if state.num_days_confirmed else "ask_num_days"
+    # "Change" button anymore). Sticky flags let us skip each ask once
+    # the user has answered it in this session.
+    if not state.num_days_confirmed:
+        return "ask_num_days"
+    if not state.travelers_confirmed:
+        return "ask_num_travelers"
+    return "elicit_scope"
 
 
 def route_after_parse_num_days(state: PlanningState) -> str:
     """After the num_days card:
     - options_payload still set → we answered a question; keep the card up
+    - otherwise → advance to ask_num_travelers or elicit_scope (sticky).
+    """
+    if state.options_payload is not None:
+        return "wait_for_next_message"
+    if not state.travelers_confirmed:
+        return "ask_num_travelers"
+    return "elicit_scope"
+
+
+def route_after_parse_num_travelers(state: PlanningState) -> str:
+    """After the num_travelers card:
+    - options_payload still set → question was answered, keep card up
     - otherwise → advance to elicit_scope
     """
     if state.options_payload is not None:

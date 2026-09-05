@@ -1,5 +1,4 @@
 issues noted
-- trip is planned only in the destination - it should also enable on the way plans
 -  ask the number of travellers
 
 - '''when can I best visit omars inn kannur for biriyani
@@ -52,4 +51,4 @@ ACTION
 - dashboard itenary - - dashboard itenary
 
 - ADD travel
-- plan the trip on the way 
+- plan the trip on the way - trip is planned only in the destination - it should also enable on the way plans

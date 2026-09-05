@@ -18,6 +18,8 @@ export default function OptionsCard({ payload, onAction, disabled }: Props) {
 
   const isItemCard = payload.kind === 'places' || payload.kind === 'stays'
   const isNumDaysCard = payload.kind === 'num_days'
+  const isNumTravelersCard = payload.kind === 'num_travelers'
+  const isNumericCard = isNumDaysCard || isNumTravelersCard
 
   function toggle(id: string) {
     setSelected((prev) => {
@@ -48,7 +50,7 @@ export default function OptionsCard({ payload, onAction, disabled }: Props) {
     // the parser reads ids[0].
     if (id === 'more') return onAction({ action: 'more' })
     if (id === 'correct') return onAction({ action: 'correct', ids: [id] })
-    if (isNumDaysCard) return onAction({ action: 'select', ids: [id] })
+    if (isNumericCard) return onAction({ action: 'select', ids: [id] })
     onAction({ action: 'confirm', ids: [id] })
   }
 
@@ -156,7 +158,7 @@ export default function OptionsCard({ payload, onAction, disabled }: Props) {
         </>
       )}
 
-      {!isItemCard && !isNumDaysCard && (
+      {!isItemCard && !isNumericCard && (
         <div className="options-actions options-actions-buttons">
           {payload.actions.map((a) => (
             <button
@@ -172,7 +174,7 @@ export default function OptionsCard({ payload, onAction, disabled }: Props) {
         </div>
       )}
 
-      {isNumDaysCard && (
+      {isNumericCard && (
         <>
           <div className="options-actions options-actions-buttons">
             {payload.actions.map((a) => (
@@ -191,7 +193,11 @@ export default function OptionsCard({ payload, onAction, disabled }: Props) {
             <input
               type="number"
               min={1}
-              placeholder="Or type a number of days…"
+              placeholder={
+                isNumTravelersCard
+                  ? 'Or type a number of travelers…'
+                  : 'Or type a number of days…'
+              }
               value={customDays}
               onChange={(e) => setCustomDays(e.target.value)}
               onKeyDown={(e) => {

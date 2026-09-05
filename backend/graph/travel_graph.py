@@ -63,11 +63,13 @@ from graph.nodes_itinerary import (
 )
 from graph.nodes_preplanning import (
     ask_num_days_node,
+    ask_num_travelers_node,
     confirm_basics_node,
     elicit_scope_node,
     fill_missing_agents_node,
     parse_confirm_node,
     parse_num_days_node,
+    parse_num_travelers_node,
     parse_places_reply_node,
     parse_scope_node,
     parse_stays_reply_node,
@@ -75,6 +77,7 @@ from graph.nodes_preplanning import (
     propose_stays_for_selection_node,
     route_after_parse_confirm,
     route_after_parse_num_days,
+    route_after_parse_num_travelers,
     route_after_parse_places,
     route_after_parse_scope,
     route_after_parse_stays,
@@ -172,6 +175,8 @@ def _slot_gate_route(state: PlanningState):
         return "confirm_basics"
     if not state.num_days_confirmed:
         return "ask_num_days"
+    if not state.travelers_confirmed:
+        return "ask_num_travelers"
     return "elicit_scope"
 
 
@@ -236,6 +241,8 @@ def build_travel_graph():
     g.add_node("parse_confirm", parse_confirm_node)
     g.add_node("ask_num_days", ask_num_days_node)
     g.add_node("parse_num_days", parse_num_days_node)
+    g.add_node("ask_num_travelers", ask_num_travelers_node)
+    g.add_node("parse_num_travelers", parse_num_travelers_node)
     g.add_node("elicit_scope", elicit_scope_node)
     g.add_node("parse_scope", parse_scope_node)
     g.add_node("propose_places", propose_places_node)
@@ -285,14 +292,26 @@ def build_travel_graph():
         route_after_parse_confirm,
         {
             "ask_num_days": "ask_num_days",
+            "ask_num_travelers": "ask_num_travelers",
             "elicit_scope": "elicit_scope",
         },
     )
-    # ask_num_days → wait → parse_num_days → elicit_scope (or stay if question)
+    # ask_num_days → wait → parse_num_days → ask_num_travelers | elicit_scope
     g.add_edge("ask_num_days", "wait_for_next_message")
     g.add_conditional_edges(
         "parse_num_days",
         route_after_parse_num_days,
+        {
+            "wait_for_next_message": "wait_for_next_message",
+            "ask_num_travelers": "ask_num_travelers",
+            "elicit_scope": "elicit_scope",
+        },
+    )
+    # ask_num_travelers → wait → parse_num_travelers → elicit_scope (or stay)
+    g.add_edge("ask_num_travelers", "wait_for_next_message")
+    g.add_conditional_edges(
+        "parse_num_travelers",
+        route_after_parse_num_travelers,
         {
             "wait_for_next_message": "wait_for_next_message",
             "elicit_scope": "elicit_scope",
@@ -351,6 +370,7 @@ def build_travel_graph():
             "intent_decision": "intent_decision",
             "parse_confirm": "parse_confirm",
             "parse_num_days": "parse_num_days",
+            "parse_num_travelers": "parse_num_travelers",
             "parse_scope": "parse_scope",
             "parse_places_reply": "parse_places_reply",
             "parse_stays_reply": "parse_stays_reply",

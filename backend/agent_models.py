@@ -283,6 +283,7 @@ Phase = Literal[
 PreStage = Literal[
     "confirm_basics",
     "num_days",
+    "num_travelers",
     "scope",
     "places",
     "stays",
@@ -346,6 +347,8 @@ class PlanningState(BaseModel):
     # Sticky flag — once the user answers ask_num_days_node in this
     # session, we don't re-ask on subsequent turns.
     num_days_confirmed: bool = False
+    # Same idea for the traveler-count ask.
+    travelers_confirmed: bool = False
     options_payload: dict | None = None
     selected_place_ids: list[str] = []
     selected_stay_ids: list[str] = []
