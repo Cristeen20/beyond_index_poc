@@ -22,15 +22,17 @@ from fastapi.middleware.cors import CORSMiddleware
 from langfuse.decorators import langfuse_context
 
 from agent_models import PlanRequest, PlanResponse
-from graph import close_checkpointer, init_checkpointer
+from graph import close_checkpointer, get_pool, init_checkpointer
 from travel_orchestrator import plan as plan_handler
+from trips_store import get_trip, list_trips, save_trip, setup_trips_table
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    # Opens the Postgres pool and creates the checkpoint tables when
+    # Opens the Postgres pool and creates the checkpoint + trips tables when
     # DATABASE_URL is set; no-op for the local MemorySaver path.
     await init_checkpointer()
+    await setup_trips_table(get_pool())
     yield
     await close_checkpointer()
     # Drain any pending Langfuse spans before the process exits — the SDK
@@ -61,8 +63,26 @@ async def plan_endpoint(req: PlanRequest) -> PlanResponse:
     re-enter intent_decision with the new message + persisted trip/itinerary
     context. See itinerary_langgraph_flow.md."""
     try:
-        return await plan_handler(req)
+        response = await plan_handler(req)
+        if response.itinerary:
+            await save_trip(get_pool(), response.itinerary, req.session_id)
+        return response
     except KeyError as exc:
         raise HTTPException(status_code=500, detail=f"Missing env var: {exc}") from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.get("/trips")
+async def get_trips(user_id: str) -> list[dict]:
+    """Return trip summaries for a given user_id, newest first."""
+    return await list_trips(get_pool(), user_id)
+
+
+@app.get("/trips/{trip_id}")
+async def get_trip_detail(trip_id: str) -> dict:
+    """Return the full itinerary JSON for a trip."""
+    trip = await get_trip(get_pool(), trip_id)
+    if trip is None:
+        raise HTTPException(status_code=404, detail="Trip not found")
+    return trip

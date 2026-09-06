@@ -13,13 +13,20 @@
 .app-header {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 12px;
-  padding: 16px 22px;
+  padding: 12px 22px;
   padding-left: max(22px, env(safe-area-inset-left));
   padding-right: max(22px, env(safe-area-inset-right));
   background: var(--surface);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
+}
+
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 
 .header-icon {
@@ -38,9 +45,192 @@
   font-size: 17px;
   font-weight: 600;
   color: var(--text);
-  flex: 1;
   letter-spacing: -0.01em;
 }
+
+/* ── Nav tabs ───────────────────────────────────────── */
+.nav-tabs {
+  display: flex;
+  gap: 4px;
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 3px;
+}
+
+.nav-tab {
+  background: none;
+  border: none;
+  border-radius: 7px;
+  padding: 6px 14px;
+  font-family: var(--font);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background .15s, color .15s;
+  white-space: nowrap;
+}
+.nav-tab:hover { color: var(--text); background: var(--surface); }
+.nav-tab.active {
+  background: var(--primary);
+  color: #fff;
+  font-weight: 600;
+}
+
+/* ── Dashboard ──────────────────────────────────────── */
+.dashboard {
+  flex: 1;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 24px 20px;
+  min-height: 0;
+}
+
+.dashboard-heading {
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 18px;
+  letter-spacing: -0.01em;
+}
+
+.dashboard-empty {
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 14px;
+  padding: 48px 24px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.dashboard-error { color: var(--error); }
+
+.dashboard-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.dashboard-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  box-shadow: var(--shadow-sm);
+}
+
+.dashboard-card-header {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 18px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  transition: background .12s;
+}
+.dashboard-card-header:hover { background: var(--primary-softer); }
+
+.dash-card-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+}
+
+.dash-card-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dash-card-meta {
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+
+.dash-card-chevron {
+  font-size: 11px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.dashboard-card-body {
+  border-top: 1px solid var(--border);
+  padding: 18px;
+}
+
+.dash-expand-loading {
+  color: var(--text-muted);
+  font-size: 13px;
+  text-align: center;
+  padding: 12px 0;
+}
+
+/* ── Expanded itinerary in dashboard ─────────────────── */
+.dashboard-itinerary { display: flex; flex-direction: column; gap: 16px; }
+
+.dash-itin-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+.dash-itin-title { font-size: 15px; font-weight: 600; color: var(--text); }
+.dash-itin-cost { font-size: 13px; color: var(--text-muted); }
+
+.dash-days { display: flex; flex-direction: column; gap: 14px; }
+
+.dash-day {
+  border-top: 1px dashed var(--border);
+  padding-top: 12px;
+}
+.dash-day:first-child { border-top: none; padding-top: 0; }
+
+.dash-day-header {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.dash-day-header strong { font-size: 13px; color: var(--primary); }
+.dash-day-meta { font-size: 12.5px; color: var(--text-muted); }
+.dash-hotel { font-size: 12.5px; color: var(--text-muted); }
+
+.dash-segments {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding-left: 4px;
+}
+
+.dash-segment {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 13px;
+}
+.dash-time { color: var(--primary); font-weight: 600; width: 44px; flex-shrink: 0; font-size: 12px; }
+.dash-seg-title { flex: 1; color: var(--text); }
+.dash-seg-cost { color: var(--text-muted); font-size: 12px; flex-shrink: 0; }
+
+.dash-day-notes, .dash-global-notes {
+  margin-top: 6px;
+  font-size: 12.5px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+.dash-day-notes li::before { content: '• '; }
 
 .header-badge {
   font-size: 10px;
