@@ -1,0 +1,37 @@
+# NOTE: once this file exists Vercel stops falling back to .gitignore, so
+# every exclusion that matters for uploads has to be repeated here.
+
+# Secrets — never upload; real values live in Vercel env vars.
+.env
+.env.local
+backend/.env
+backend/.env.local
+
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+
+# Node / build output
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# The direct_v1 chat UI is a separate experiment, not part of this deploy.
+frontend/direct_chat/
+backend/direct_chat/
+
+# Docs
+*.md
+!README.md
+
+# Local tooling
+.vscode/
+.idea/
+.claude/
+.commandcode/
+.DS_Store

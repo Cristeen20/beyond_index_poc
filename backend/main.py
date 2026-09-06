@@ -1,22 +1,45 @@
+import logging
+
 from dotenv import load_dotenv
 
 load_dotenv()  # load .env before anything else imports os.environ
 
-from fastapi import FastAPI, Form, HTTPException, Response
-from fastapi.middleware.cors import CORSMiddleware
-from xml.sax.saxutils import escape as xml_escape
-
-from models import (
-    ChatHistoryItem,
-    ChatRequest,
-    ChatResponse,
-    Itinerary,
-    ItineraryRequest,
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    datefmt="%H:%M:%S",
+    force=True,  # uvicorn installs its own root handlers; force= wins.
 )
-from orchestrator import generate_itinerary, chat as chat_handler
+for _name in (
+    "intake_router", "travel_orchestrator", "itinerary_agent", "sub_agents",
+):
+    logging.getLogger(_name).setLevel(logging.INFO)
+
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from langfuse.decorators import langfuse_context
+
+from agent_models import PlanRequest, PlanResponse
+from graph import close_checkpointer, init_checkpointer
+from travel_orchestrator import plan as plan_handler
 
 
-app = FastAPI(title="Trip Itinerary Generator", version="0.1.0")
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    # Opens the Postgres pool and creates the checkpoint tables when
+    # DATABASE_URL is set; no-op for the local MemorySaver path.
+    await init_checkpointer()
+    yield
+    await close_checkpointer()
+    # Drain any pending Langfuse spans before the process exits — the SDK
+    # batches in the background and would otherwise drop the tail on a
+    # serverless cold-stop. No-op when Langfuse env vars are unset.
+    langfuse_context.flush()
+
+
+app = FastAPI(title="Trip Itinerary Generator", version="0.1.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -31,78 +54,15 @@ async def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.post("/chat", response_model=ChatResponse)
-async def chat_endpoint(req: ChatRequest) -> ChatResponse:
+@app.post("/plan", response_model=PlanResponse)
+async def plan_endpoint(req: PlanRequest) -> PlanResponse:
+    """Session-checkpointed LangGraph plan flow. First call for a session_id
+    runs from START; subsequent calls resume at wait_for_next_message and
+    re-enter intent_decision with the new message + persisted trip/itinerary
+    context. See itinerary_langgraph_flow.md."""
     try:
-        return await chat_handler(req)
+        return await plan_handler(req)
     except KeyError as exc:
         raise HTTPException(status_code=500, detail=f"Missing env var: {exc}") from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
-
-
-@app.post("/itinerary", response_model=Itinerary)
-async def create_itinerary(req: ItineraryRequest) -> Itinerary:
-    try:
-        return await generate_itinerary(req)
-    except KeyError as exc:
-        raise HTTPException(status_code=500, detail=f"Missing env var: {exc}") from exc
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
-
-
-# In-memory chat history per WhatsApp sender. Resets on server restart —
-# fine for the POC; swap for Redis/DB if this graduates.
-_whatsapp_history: dict[str, list[ChatHistoryItem]] = {}
-_MAX_HISTORY = 20
-_WHATSAPP_CHAR_LIMIT = 1500  # Twilio caps a single WhatsApp message at 1600
-
-
-def _format_itinerary(it: Itinerary) -> str:
-    lines = [f"*{it.destination}* — {len(it.days)}-day itinerary", ""]
-    for day in it.days:
-        lines.append(f"*Day {day.day} — {day.theme}*")
-        for stop in day.stops:
-            lines.append(f"  • {stop.time} {stop.name} ({stop.duration_minutes}m)")
-            if stop.notes:
-                lines.append(f"    _{stop.notes}_")
-        if day.lodging:
-            lines.append(f"  🛏 {day.lodging}")
-        lines.append("")
-    if it.advisories:
-        lines.append("*Advisories:*")
-        lines.extend(f"• {a}" for a in it.advisories)
-    return "\n".join(lines).strip()
-
-
-def _twiml(body: str) -> Response:
-    if len(body) > _WHATSAPP_CHAR_LIMIT:
-        body = body[: _WHATSAPP_CHAR_LIMIT - 1] + "…"
-    xml = (
-        f'<?xml version="1.0" encoding="UTF-8"?>'
-        f"<Response><Message>{xml_escape(body)}</Message></Response>"
-    )
-    return Response(content=xml, media_type="application/xml")
-
-
-@app.post("/whatsapp")
-async def whatsapp_webhook(
-    From: str = Form(...),
-    Body: str = Form(...),
-) -> Response:
-    history = _whatsapp_history.setdefault(From, [])
-    try:
-        result = await chat_handler(ChatRequest(message=Body, history=history))
-    except Exception as exc:  # noqa: BLE001
-        return _twiml(f"Sorry — something went wrong: {exc}")
-
-    reply = result.text
-    if result.itinerary is not None:
-        reply = f"{reply}\n\n{_format_itinerary(result.itinerary)}"
-
-    history.append(ChatHistoryItem(role="user", content=Body))
-    history.append(ChatHistoryItem(role="assistant", content=result.text))
-    if len(history) > _MAX_HISTORY:
-        del history[: len(history) - _MAX_HISTORY]
-
-    return _twiml(reply)

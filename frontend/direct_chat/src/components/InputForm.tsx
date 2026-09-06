@@ -31,8 +31,8 @@ export default function InputForm({ onSubmit, disabled }: Props) {
     <form className="input-form" onSubmit={handleSubmit}>
       <div className="input-row">
         <textarea
-          className="input-destination"
-          placeholder="Ask about a destination, get recommendations, or request an itinerary… (Shift+Enter for new line)"
+          className="input-field"
+          placeholder="Ask about a destination, get travel tips… (Shift+Enter for new line)"
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={handleKeyDown}
@@ -43,9 +43,8 @@ export default function InputForm({ onSubmit, disabled }: Props) {
           type="submit"
           className="btn-send"
           disabled={!text.trim() || disabled}
-          aria-label="Send"
         >
-          ↑
+          Send ↗
         </button>
       </div>
     </form>

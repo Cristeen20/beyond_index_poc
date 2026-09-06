@@ -1,11 +1,14 @@
-import type { Message } from '../types'
+import type { Message, OptionAction } from '../types'
 import ItineraryCard from './ItineraryCard'
+import OptionsCard from './OptionsCard'
 
 interface Props {
   message: Message
+  onOptionAction?: (action: OptionAction) => void
+  optionActionDisabled?: boolean
 }
 
-export default function ChatMessage({ message }: Props) {
+export default function ChatMessage({ message, onOptionAction, optionActionDisabled }: Props) {
   if (message.role === 'user') {
     return (
       <div className="message message-user">
@@ -36,12 +39,24 @@ export default function ChatMessage({ message }: Props) {
     )
   }
 
+  // When there's an options card AND the text is just the card title, the
+  // card already displays it as a header — skip the duplicate bubble.
+  const suppressBubble =
+    !!message.optionsPayload && message.text === message.optionsPayload.title
+
   return (
     <div className="message message-assistant">
-      {message.text && (
+      {message.text && !suppressBubble && (
         <div className="bubble bubble-assistant">{message.text}</div>
       )}
       {message.itinerary && <ItineraryCard itinerary={message.itinerary} />}
+      {message.optionsPayload && onOptionAction && (
+        <OptionsCard
+          payload={message.optionsPayload}
+          onAction={onOptionAction}
+          disabled={optionActionDisabled}
+        />
+      )}
     </div>
   )
 }

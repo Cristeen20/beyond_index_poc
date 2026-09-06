@@ -1,0 +1,25 @@
+# Manifest for the deployed Vercel Python function (api/index.py) — Vercel
+# installs from the project root.
+#
+# Kept in sync with backend/requirements.txt by hand: Vercel's parser does
+# not support `-r` includes, so the list has to be inlined here. If you add
+# a dependency to backend/requirements.txt, add it here too.
+
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+httpx>=0.27.0
+openai>=1.35.0
+pydantic>=2.9.0
+python-dotenv>=1.0.0
+python-multipart>=0.0.9
+twilio>=9.3.0
+langgraph>=0.2.60
+
+# Durable checkpointer — see graph/session.py.
+langgraph-checkpoint-postgres>=3.1.2
+psycopg[binary,pool]>=3.2.0
+
+# Observability — drop-in OpenAI wrapper + @observe decorator route every LLM
+# call and each /plan turn to the self-hosted Langfuse instance (see
+# docker-compose.langfuse.yml). Inert when LANGFUSE_PUBLIC_KEY is unset.
+langfuse>=2.50.0,<3.0.0

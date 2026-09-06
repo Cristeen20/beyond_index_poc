@@ -1,23 +1,46 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 :root {
-  --teal: #58DBB9;
-  --jade: #4EBAA1;
-  --ash: #3D4550;
-  --slate: #20242A;
-  --pewter: #2B3038;
-  --cloud: #EEF2F6;
-  --ice: #A5BAC9;
-  --yellow: #D6FC51;
-  --blue: #0066FF;
-  --error: #FF5A5F;
-  --radius: 12px;
-  --font: 'DM Sans', system-ui, sans-serif;
+  /* Brand */
+  --primary: #5B4EE8;
+  --primary-hover: #4A3ED6;
+  --primary-soft: #EEEBFF;
+  --primary-softer: #F5F3FF;
+
+  /* Surfaces */
+  --bg: #F5F6FA;
+  --surface: #FFFFFF;
+  --surface-alt: #FAFAFD;
+
+  /* Text */
+  --text: #1B1D2A;
+  --text-muted: #6B7280;
+  --text-subtle: #9AA0AE;
+
+  /* Lines */
+  --border: #ECEBF3;
+  --border-strong: #DEDCEA;
+
+  /* Status */
+  --success: #10B981;
+  --warning: #F59E0B;
+  --error: #EF4444;
+
+  /* Shape */
+  --radius: 16px;
+  --radius-sm: 10px;
+  --radius-lg: 20px;
+  --shadow-sm: 0 1px 2px rgba(20, 20, 40, 0.04);
+  --shadow-md: 0 4px 14px rgba(20, 20, 40, 0.06);
+
+  --font: 'DM Sans', system-ui, -apple-system, sans-serif;
 }
 
 html, body, #root {
   height: 100%;
   font-family: var(--font);
-  background: var(--slate);
-  color: var(--cloud);
+  background: var(--bg);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
