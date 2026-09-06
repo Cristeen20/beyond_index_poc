@@ -36,8 +36,7 @@ feature additions
 - db with transcripts
 
 ACTION
-- issues
-- ask the budget
+
 - dashboard itenary - - dashboard itenary
 
 - ADD travel

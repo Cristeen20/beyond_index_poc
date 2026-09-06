@@ -945,15 +945,32 @@ async def propose_stays_for_selection_node(state: PlanningState) -> dict:
     if trip.total_budget and trip.num_days:
         per_night_cap = (trip.total_budget * 0.30) / max(trip.num_days, 1)
     # Drop hotels priced more than 2× the cap outright — they can't fit
-    # even with generous rebalancing between food/activities.
+    # even with generous rebalancing between food/activities. If the filter
+    # leaves nothing, fall back to the cheapest available so the user always
+    # has something to pick; the itinerary's actuals-vs-target line will
+    # surface the overrun.
+    budget_exceeded = False
     if per_night_cap > 0:
         before = len(candidates)
-        candidates = [h for h in candidates
-                      if not h.price_per_night or h.price_per_night <= per_night_cap * 2]
-        if len(candidates) < before:
+        within = [h for h in candidates
+                  if not h.price_per_night or h.price_per_night <= per_night_cap * 2]
+        if within:
+            candidates = within
+            if len(candidates) < before:
+                logger.info(
+                    "propose_stays → dropped %d hotel(s) priced >2x cap $%.0f/night",
+                    before - len(candidates), per_night_cap,
+                )
+        else:
+            budget_exceeded = True
+            candidates = sorted(
+                candidates,
+                key=lambda h: h.price_per_night or float("inf"),
+            )[:8]
             logger.info(
-                "propose_stays → dropped %d hotel(s) priced >2x cap $%.0f/night",
-                before - len(candidates), per_night_cap,
+                "propose_stays → no hotels within 2x cap $%.0f/night; "
+                "falling back to %d cheapest",
+                per_night_cap, len(candidates),
             )
 
     selected_places = [e for e in state.event_options
@@ -1036,6 +1053,17 @@ async def propose_stays_for_selection_node(state: PlanningState) -> dict:
     # shorter trips still lock to a single stay.
     allow_multi = (trip.num_days or 1) > 2
     has_more = (start + per_page) < len(candidates)
+    base_hint = (
+        "Pick one or more stays, ask a question, or see more."
+        if allow_multi
+        else "Pick a stay, ask a question, or see more."
+    )
+    if budget_exceeded:
+        base_hint = (
+            f"No stays fit ~${per_night_cap:.0f}/night — showing the "
+            f"cheapest available. Your final plan will run over the "
+            f"${trip.total_budget:.0f} target. " + base_hint
+        )
     payload = _items_payload(
         kind="stays",
         title="Stays near your picks"
@@ -1044,11 +1072,7 @@ async def propose_stays_for_selection_node(state: PlanningState) -> dict:
         page=page,
         has_more=has_more,
         select="multi" if allow_multi else "single",
-        hint=(
-            "Pick one or more stays, ask a question, or see more."
-            if allow_multi
-            else "Pick a stay, ask a question, or see more."
-        ),
+        hint=base_hint,
     )
     updates: dict = {
         "options_payload": payload,
