@@ -115,6 +115,11 @@ async def close_checkpointer() -> None:
     await _POOL.close()
 
 
+def get_pool():
+    """Return the Postgres connection pool, or None under MemorySaver."""
+    return _POOL
+
+
 def wait_for_next_message(state: PlanningState) -> dict:
     """Pause the graph until the next /plan call resumes with a new message.
 
