@@ -117,7 +117,7 @@ export interface Message {
   // button click). Excluded from `history` sent on subsequent requests so
   // they don't pollute the classifier's view of the conversation.
   synthetic?: boolean
-  // Set when the backend returned a full itinerary — triggers the
-  // "Save to My Trips" button in the chat bubble.
-  hasItinerary?: boolean
+  // Raw backend itinerary JSON — stored so the Save button can POST
+  // it to /trips/save without a round-trip to the checkpointer.
+  rawItinerary?: unknown
 }

@@ -89,7 +89,7 @@ export default function App() {
                 isLoading: false,
                 text: rendered,
                 optionsPayload: data.options_payload ?? undefined,
-                hasItinerary: !!data.itinerary,
+                rawItinerary: data.itinerary ?? undefined,
               }
             : m,
         ),
@@ -162,7 +162,18 @@ export default function App() {
                 message={msg}
                 onOptionAction={msg.id === lastInteractiveId ? handleOptionAction : undefined}
                 optionActionDisabled={isLoading}
-                onSaveToTrips={msg.hasItinerary ? () => setPage('dashboard') : undefined}
+                onSaveToTrips={msg.rawItinerary ? async () => {
+                  await fetch('/trips/save', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      session_id: sessionIdRef.current,
+                      user_id: userIdRef.current,
+                      itinerary: msg.rawItinerary,
+                    }),
+                  })
+                  setPage('dashboard')
+                } : undefined}
               />
             ))}
             <div ref={bottomRef} />

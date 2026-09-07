@@ -21,7 +21,9 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from langfuse.decorators import langfuse_context
 
-from agent_models import PlanRequest, PlanResponse
+from pydantic import BaseModel
+
+from agent_models import Itinerary, PlanRequest, PlanResponse
 from graph import close_checkpointer, get_pool, init_checkpointer
 from travel_orchestrator import plan as plan_handler
 from trips_store import get_trip, list_trips, save_trip, setup_trips_table
@@ -63,12 +65,27 @@ async def plan_endpoint(req: PlanRequest) -> PlanResponse:
     re-enter intent_decision with the new message + persisted trip/itinerary
     context. See itinerary_langgraph_flow.md."""
     try:
-        response = await plan_handler(req)
-        if response.itinerary:
-            await save_trip(get_pool(), response.itinerary, req.session_id)
-        return response
+        return await plan_handler(req)
     except KeyError as exc:
         raise HTTPException(status_code=500, detail=f"Missing env var: {exc}") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+class SaveTripRequest(BaseModel):
+    session_id: str
+    user_id: str
+    itinerary: dict
+
+
+@app.post("/trips/save")
+async def save_trip_endpoint(req: SaveTripRequest) -> dict:
+    """Explicitly save an itinerary to the dashboard (user-initiated)."""
+    try:
+        itin = Itinerary(**req.itinerary)
+        itin = itin.model_copy(update={"user_id": req.user_id})
+        await save_trip(get_pool(), itin, req.session_id)
+        return {"trip_id": itin.trip_id, "status": "saved"}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
