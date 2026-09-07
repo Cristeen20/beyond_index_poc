@@ -191,7 +191,6 @@ function TripDetail({ summary, data, onBack }: { summary: TripSummary; data: Raw
 export default function Dashboard({ userId }: Props) {
   const [trips, setTrips] = useState<TripSummary[]>([])
   const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
   const [selected, setSelected] = useState<{ summary: TripSummary; data: RawItinerary } | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
 
@@ -201,7 +200,7 @@ export default function Dashboard({ userId }: Props) {
     fetch(`/trips?user_id=${encodeURIComponent(userId)}`)
       .then((r) => r.json())
       .then((data) => { setTrips(data); setLoading(false) })
-      .catch(() => { setLoading(false) })
+      .catch(() => setLoading(false))
   }, [userId])
 
   async function openTrip(summary: TripSummary) {
@@ -235,7 +234,6 @@ export default function Dashboard({ userId }: Props) {
   }
 
   if (loading || detailLoading) return <div className="dashboard"><div className="dashboard-empty">Loading…</div></div>
-  if (error) return <div className="dashboard"><div className="dashboard-empty dashboard-error">{error}</div></div>
   if (!trips.length) return (
     <div className="dashboard">
       <div className="dashboard-empty">No saved trips yet — plan your first trip in the Chat tab!</div>
