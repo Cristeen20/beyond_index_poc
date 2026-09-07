@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type MouseEvent } from 'react'
 import type { TripSummary } from '../types'
 
 interface Props {
@@ -94,6 +94,17 @@ export default function Dashboard({ userId }: Props) {
       .catch(() => { setError('Could not load trips.'); setLoading(false) })
   }, [userId])
 
+  async function handleDelete(e: MouseEvent, tripId: string) {
+    e.stopPropagation()
+    try {
+      await fetch(`/trips/${tripId}`, { method: 'DELETE' })
+      setTrips((prev) => prev.filter((t) => t.trip_id !== tripId))
+      if (expanded === tripId) setExpanded(null)
+    } catch {
+      // silent — trip stays in list
+    }
+  }
+
   async function toggleExpand(tripId: string) {
     if (expanded === tripId) {
       setExpanded(null)
@@ -145,23 +156,33 @@ export default function Dashboard({ userId }: Props) {
       <div className="dashboard-list">
         {trips.map((t) => (
           <div key={t.trip_id} className="dashboard-card">
-            <button
-              className="dashboard-card-header"
-              onClick={() => toggleExpand(t.trip_id)}
-              aria-expanded={expanded === t.trip_id}
-            >
-              <div className="dash-card-info">
-                <span className="dash-card-title">{t.title}</span>
-                <span className="dash-card-meta">
-                  {t.destination && `${t.destination} · `}
-                  {formatDate(t.created_at)}
-                  {t.total_cost > 0 && ` · ~$${t.total_cost.toFixed(0)}`}
+            <div className="dashboard-card-header">
+              <button
+                className="dash-card-expand"
+                onClick={() => toggleExpand(t.trip_id)}
+                aria-expanded={expanded === t.trip_id}
+              >
+                <div className="dash-card-info">
+                  <span className="dash-card-title">{t.title}</span>
+                  <span className="dash-card-meta">
+                    {t.destination && `${t.destination} · `}
+                    {formatDate(t.created_at)}
+                    {t.total_cost > 0 && ` · ~$${t.total_cost.toFixed(0)}`}
+                  </span>
+                </div>
+                <span className="dash-card-chevron">
+                  {expanded === t.trip_id ? '▲' : '▼'}
                 </span>
-              </div>
-              <span className="dash-card-chevron">
-                {expanded === t.trip_id ? '▲' : '▼'}
-              </span>
-            </button>
+              </button>
+              <button
+                className="dash-card-delete"
+                onClick={(e) => handleDelete(e, t.trip_id)}
+                title="Delete trip"
+                aria-label="Delete trip"
+              >
+                🗑
+              </button>
+            </div>
 
             {expanded === t.trip_id && (
               <div className="dashboard-card-body">

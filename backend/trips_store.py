@@ -93,6 +93,18 @@ async def list_trips(pool, user_id: str) -> list[dict[str, Any]]:
     return [dict(r) for r in results]
 
 
+async def delete_trip(pool, trip_id: str) -> bool:
+    """Delete a trip by id. Returns True if a row was deleted."""
+    if pool is None:
+        return False
+    async with pool.connection() as conn:
+        result = await conn.execute(
+            "DELETE FROM trips WHERE trip_id = %s",
+            (trip_id,),
+        )
+        return result.rowcount > 0
+
+
 async def get_trip(pool, trip_id: str) -> dict[str, Any] | None:
     if pool is None:
         return None

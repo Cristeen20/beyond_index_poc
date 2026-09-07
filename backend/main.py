@@ -26,7 +26,7 @@ from pydantic import BaseModel
 from agent_models import Itinerary, PlanRequest, PlanResponse
 from graph import close_checkpointer, get_pool, init_checkpointer
 from travel_orchestrator import plan as plan_handler
-from trips_store import get_trip, list_trips, save_trip, setup_trips_table
+from trips_store import delete_trip, get_trip, list_trips, save_trip, setup_trips_table
 
 
 @asynccontextmanager
@@ -48,7 +48,7 @@ app = FastAPI(title="Trip Itinerary Generator", version="0.1.0", lifespan=lifesp
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000"],
-    allow_methods=["GET", "POST"],
+    allow_methods=["GET", "POST", "DELETE"],
     allow_headers=["*"],
 )
 
@@ -103,3 +103,12 @@ async def get_trip_detail(trip_id: str) -> dict:
     if trip is None:
         raise HTTPException(status_code=404, detail="Trip not found")
     return trip
+
+
+@app.delete("/trips/{trip_id}")
+async def delete_trip_endpoint(trip_id: str) -> dict:
+    """Delete a saved trip."""
+    deleted = await delete_trip(get_pool(), trip_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Trip not found")
+    return {"status": "deleted"}
