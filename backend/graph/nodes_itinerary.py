@@ -207,6 +207,25 @@ def assemble_itinerary_node(state: PlanningState) -> dict:
     raw = state.draft_itinerary or {}
     days = _hydrate_days(raw.get("days", []), _hotels_by_id(state))
     trip = state.trip_request
+
+    # Back-fill lat/lng on each segment by matching item_ref to the
+    # picked events, hotels, and restaurants — the LLM doesn't emit
+    # coordinates but we have them in state from the Google Places calls.
+    coords: dict[str, tuple[float, float]] = {}
+    for e in (state.event_options or []):
+        if e.event_id and e.latitude and e.longitude:
+            coords[e.event_id] = (e.latitude, e.longitude)
+    for h in (state.hotel_options or []):
+        if h.hotel_id and h.latitude and h.longitude:
+            coords[h.hotel_id] = (h.latitude, h.longitude)
+    for r in (state.restaurant_options or []):
+        if r.restaurant_id and r.latitude and r.longitude:
+            coords[r.restaurant_id] = (r.latitude, r.longitude)
+    for d in days:
+        for s in d.segments:
+            if s.item_ref and s.item_ref in coords and s.latitude is None:
+                s.latitude, s.longitude = coords[s.item_ref]
+
     actual_total = _compute_total_cost(days, state.budget)
 
     # Surface the actual computed cost against the user's target so they can
