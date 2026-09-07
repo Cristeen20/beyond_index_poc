@@ -3,15 +3,31 @@ import type { Message, OptionAction, PlanRequest, PlanResponse } from './types'
 import { formatPlanResponse } from './utils/format'
 import ChatMessage from './components/ChatMessage'
 import InputForm from './components/InputForm'
+import Dashboard from './components/Dashboard'
 import './App.css'
+
+type Page = 'chat' | 'dashboard'
+
+function getOrCreateUserId(): string {
+  const key = 'destinationAgentUserId'
+  let id = localStorage.getItem(key)
+  if (!id) {
+    id = crypto.randomUUID()
+    localStorage.setItem(key, id)
+  }
+  return id
+}
 
 export default function App() {
   const [messages, setMessages] = useState<Message[]>([])
   const [isLoading, setIsLoading] = useState(false)
+  const [page, setPage] = useState<Page>('chat')
   const bottomRef = useRef<HTMLDivElement>(null)
   // One session_id per browser tab — reused across turns so the backend
   // resumes the LangGraph checkpointer instead of restarting from START.
   const sessionIdRef = useRef<string>(crypto.randomUUID())
+  // Persistent user ID across sessions — stored in localStorage.
+  const userIdRef = useRef<string>(getOrCreateUserId())
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -46,6 +62,7 @@ export default function App() {
       message: text,
       session_id: sessionIdRef.current,
       history,
+      user_profile: { user_id: userIdRef.current },
       ...(optionAction ? { option_action: optionAction } : {}),
     }
 
@@ -72,6 +89,7 @@ export default function App() {
                 isLoading: false,
                 text: rendered,
                 optionsPayload: data.options_payload ?? undefined,
+                rawItinerary: data.itinerary ?? undefined,
               }
             : m,
         ),
@@ -105,33 +123,67 @@ export default function App() {
   return (
     <div className="app">
       <header className="app-header">
-        <span className="header-icon" aria-hidden>✈</span>
-        <h1>AI Trip Planner</h1>
-        <span className="header-badge">POC</span>
+        <div className="header-left">
+          <span className="header-icon" aria-hidden>✈</span>
+          <h1>AI Trip Planner</h1>
+          <span className="header-badge">POC</span>
+        </div>
+        <nav className="nav-tabs" aria-label="Main navigation">
+          <button
+            className={`nav-tab${page === 'chat' ? ' active' : ''}`}
+            onClick={() => setPage('chat')}
+          >
+            Chat
+          </button>
+          <button
+            className={`nav-tab${page === 'dashboard' ? ' active' : ''}`}
+            onClick={() => setPage('dashboard')}
+          >
+            My Trips
+          </button>
+        </nav>
       </header>
 
-      <main className="chat-window">
-        {messages.length === 0 && (
-          <div className="welcome-hint">
-            Ask about destinations, get place recommendations, or request a full itinerary.
-            <br />
-            Try: "What are the best spots in Niagara?" or "I'm looking for a historic trip in Ontario — suggest some places."
-          </div>
-        )}
-        {messages.map((msg) => (
-          <ChatMessage
-            key={msg.id}
-            message={msg}
-            onOptionAction={msg.id === lastInteractiveId ? handleOptionAction : undefined}
-            optionActionDisabled={isLoading}
-          />
-        ))}
-        <div ref={bottomRef} />
-      </main>
+      {page === 'dashboard' ? (
+        <Dashboard userId={userIdRef.current} />
+      ) : (
+        <>
+          <main className="chat-window">
+            {messages.length === 0 && (
+              <div className="welcome-hint">
+                Ask about destinations, get place recommendations, or request a full itinerary.
+                <br />
+                Try: "What are the best spots in Niagara?" or "I'm looking for a historic trip in Ontario — suggest some places."
+              </div>
+            )}
+            {messages.map((msg) => (
+              <ChatMessage
+                key={msg.id}
+                message={msg}
+                onOptionAction={msg.id === lastInteractiveId ? handleOptionAction : undefined}
+                optionActionDisabled={isLoading}
+                onSaveToTrips={msg.rawItinerary ? async () => {
+                  await fetch('/trips/save', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      session_id: sessionIdRef.current,
+                      user_id: userIdRef.current,
+                      itinerary: msg.rawItinerary,
+                    }),
+                  })
+                  setPage('dashboard')
+                } : undefined}
+              />
+            ))}
+            <div ref={bottomRef} />
+          </main>
 
-      <footer className="chat-footer">
-        <InputForm onSubmit={handleSubmit} disabled={isLoading} />
-      </footer>
+          <footer className="chat-footer">
+            <InputForm onSubmit={handleSubmit} disabled={isLoading} />
+          </footer>
+        </>
+      )}
     </div>
   )
 }

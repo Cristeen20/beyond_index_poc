@@ -54,6 +54,15 @@ export interface PlanRequest {
   session_id: string
   history?: HistoryItem[]
   option_action?: OptionAction
+  user_profile?: { user_id: string }
+}
+
+export interface TripSummary {
+  trip_id: string
+  title: string
+  destination: string
+  created_at: string
+  total_cost: number
 }
 
 // Structured selection card (features/pre_planning.md). When present the
@@ -108,4 +117,7 @@ export interface Message {
   // button click). Excluded from `history` sent on subsequent requests so
   // they don't pollute the classifier's view of the conversation.
   synthetic?: boolean
+  // Raw backend itinerary JSON — stored so the Save button can POST
+  // it to /trips/save without a round-trip to the checkpointer.
+  rawItinerary?: unknown
 }

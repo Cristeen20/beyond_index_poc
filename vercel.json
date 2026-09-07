@@ -12,6 +12,8 @@
   },
   "rewrites": [
     { "source": "/plan", "destination": "/api/index" },
-    { "source": "/health", "destination": "/api/index" }
+    { "source": "/health", "destination": "/api/index" },
+    { "source": "/trips", "destination": "/api/index" },
+    { "source": "/trips/:path*", "destination": "/api/index" }
   ]
 }
