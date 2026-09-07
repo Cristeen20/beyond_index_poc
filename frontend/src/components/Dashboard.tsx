@@ -25,11 +25,20 @@ interface RawDay {
   notes?: string[]
 }
 
+interface ItinLocation {
+  name: string
+  lat: number
+  lng: number
+  type: 'place' | 'stay'
+  day?: number
+}
+
 interface RawItinerary {
   title: string
   days: RawDay[]
   total_cost: number
   notes?: string[]
+  locations?: ItinLocation[]
 }
 
 type Tab = 'itinerary' | 'stay' | 'dining' | 'options'
@@ -136,8 +145,8 @@ function DayRow({ day, open, onToggle }: { day: RawDay; open: boolean; onToggle:
 // ── Tab panels ───────────────────────────────────────────────────────────────
 
 function buildMarkers(data: RawItinerary): MapMarker[] {
-  const markers: MapMarker[] = []
   const seen = new Set<string>()
+  const markers: MapMarker[] = []
 
   function addPin(lat: number, lng: number, title: string, day: number, type: MapMarker['type']) {
     const key = `${lat.toFixed(4)},${lng.toFixed(4)}`
@@ -146,14 +155,19 @@ function buildMarkers(data: RawItinerary): MapMarker[] {
     markers.push({ lat, lng, title, day, type })
   }
 
-  for (const d of data.days) {
-    // Segment-level coordinates (from back-fill in assemble_itinerary_node)
-    for (const s of d.segments || []) {
-      if (s.latitude && s.longitude) {
-        addPin(s.latitude, s.longitude, s.title, d.day_number, 'place')
-      }
+  // Primary: authoritative list stored at assembly time from Google Places data
+  if (data.locations?.length) {
+    for (const loc of data.locations) {
+      addPin(loc.lat, loc.lng, loc.name, loc.day ?? 0, loc.type)
     }
-    // Accommodation coordinates (always present on HotelOption)
+    return markers
+  }
+
+  // Fallback for older trips stored before the locations field was added
+  for (const d of data.days) {
+    for (const s of d.segments || []) {
+      if (s.latitude && s.longitude) addPin(s.latitude, s.longitude, s.title, d.day_number, 'place')
+    }
     if (d.accommodation?.latitude && d.accommodation?.longitude) {
       addPin(d.accommodation.latitude, d.accommodation.longitude, d.accommodation.name, d.day_number, 'stay')
     }

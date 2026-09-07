@@ -14,7 +14,7 @@ import logging
 import uuid
 from datetime import datetime
 
-from agent_models import Itinerary, PlanningState
+from agent_models import Itinerary, ItineraryLocation, PlanningState
 from itinerary_agent import (
     _build_planner_prompt,
     _build_revision_prompt,
@@ -268,6 +268,36 @@ def assemble_itinerary_node(state: PlanningState) -> dict:
                 f"under by ${-delta:.0f})."
             )
 
+    # Build a deduplicated list of all picked places + stays with their
+    # confirmed Google Places coordinates.  This is the authoritative source
+    # for map pins — independent of whether segment back-fill succeeded.
+    loc_seen: set[tuple[float, float]] = set()
+    locations: list[ItineraryLocation] = []
+
+    # Picked event/place locations
+    for e in (state.event_options or []):
+        if e.latitude and e.longitude:
+            key = (round(e.latitude, 4), round(e.longitude, 4))
+            if key not in loc_seen:
+                loc_seen.add(key)
+                locations.append(ItineraryLocation(
+                    name=e.name, lat=e.latitude, lng=e.longitude, type="place"
+                ))
+
+    # Picked stay locations (per day to capture multi-stay trips)
+    for i, d in enumerate(days):
+        if d.accommodation and d.accommodation.latitude and d.accommodation.longitude:
+            key = (round(d.accommodation.latitude, 4), round(d.accommodation.longitude, 4))
+            if key not in loc_seen:
+                loc_seen.add(key)
+                locations.append(ItineraryLocation(
+                    name=d.accommodation.name,
+                    lat=d.accommodation.latitude,
+                    lng=d.accommodation.longitude,
+                    type="stay",
+                    day=d.day_number,
+                ))
+
     itinerary = Itinerary(
         trip_id=str(uuid.uuid4()),
         user_id=(state.user_profile.user_id if state.user_profile else "anonymous"),
@@ -276,6 +306,7 @@ def assemble_itinerary_node(state: PlanningState) -> dict:
         total_cost=actual_total,
         budget_breakdown=state.budget,
         notes=(raw.get("notes") or []) + state.conflict_notes + extra_notes,
+        locations=locations,
         created_at=datetime.utcnow(),
         version=1,
     )

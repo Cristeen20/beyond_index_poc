@@ -205,6 +205,14 @@ class BudgetBreakdown(BaseModel):
     remaining: float = 0.0
 
 
+class ItineraryLocation(BaseModel):
+    name: str
+    lat: float
+    lng: float
+    type: str  # "place" | "stay"
+    day: int = 0
+
+
 class Itinerary(BaseModel):
     trip_id: str
     user_id: str
@@ -213,6 +221,8 @@ class Itinerary(BaseModel):
     total_cost: float
     budget_breakdown: BudgetBreakdown
     notes: list[str] = []
+    # Picked places and stays with confirmed Google Places coordinates.
+    locations: list[ItineraryLocation] = []
     created_at: datetime = Field(default_factory=datetime.utcnow)
     version: int = 1
 
