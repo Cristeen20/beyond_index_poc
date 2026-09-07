@@ -104,27 +104,26 @@ function DayRow({ day, open, onToggle }: { day: RawDay; open: boolean; onToggle:
 
       {/* Expanded segment cards */}
       {open && (
-        <div className="itin-segments-grid">
+        <div className="itin-segments-list">
           {activities.map((s, i) => (
-            <div key={i} className="itin-seg-card">
-              <div className="itin-seg-card-top">
-                <span className="itin-seg-icon">{TYPE_ICON[s.type] || '📍'}</span>
-                {hhmm(s.start_time) && <span className="itin-seg-time">{hhmm(s.start_time)}</span>}
+            <div key={i} className="itin-seg-row">
+              <span className="itin-seg-time">{hhmm(s.start_time) || '–'}</span>
+              <span className="itin-seg-icon">{TYPE_ICON[s.type] || '📍'}</span>
+              <div className="itin-seg-info">
+                <span className="itin-seg-name">{s.title}</span>
+                {s.location && <span className="itin-seg-loc">{s.location}</span>}
               </div>
-              <span className="itin-seg-name">{s.title}</span>
-              {s.location && <span className="itin-seg-loc">{s.location}</span>}
               {s.cost > 0 && <span className="itin-seg-cost">${s.cost.toFixed(0)}</span>}
             </div>
           ))}
           {day.accommodation && (
-            <div className="itin-seg-card itin-seg-card--stay">
-              <div className="itin-seg-card-top">
-                <span className="itin-seg-icon">🛏</span>
+            <div className="itin-seg-row itin-seg-row--stay">
+              <span className="itin-seg-time" />
+              <span className="itin-seg-icon">🛏</span>
+              <div className="itin-seg-info">
+                <span className="itin-seg-name">{day.accommodation.name}</span>
+                {day.accommodation.address && <span className="itin-seg-loc">{day.accommodation.address}</span>}
               </div>
-              <span className="itin-seg-name">{day.accommodation.name}</span>
-              {day.accommodation.address && (
-                <span className="itin-seg-loc">{day.accommodation.address}</span>
-              )}
             </div>
           )}
         </div>
