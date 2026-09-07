@@ -1,5 +1,6 @@
 import { useEffect, useState, type MouseEvent } from 'react'
 import type { TripSummary } from '../types'
+import TripMap, { type MapMarker } from './TripMap'
 
 interface Props { userId: string }
 
@@ -134,13 +135,41 @@ function DayRow({ day, open, onToggle }: { day: RawDay; open: boolean; onToggle:
 
 // ── Tab panels ───────────────────────────────────────────────────────────────
 
-function ItineraryTab({ data, tripId }: { data: RawItinerary; tripId: string }) {
+function buildMarkers(data: RawItinerary): MapMarker[] {
+  const markers: MapMarker[] = []
+  const seen = new Set<string>()
+  for (const d of data.days) {
+    // Activity/segment markers
+    for (const s of d.segments || []) {
+      if (!s.latitude || !s.longitude) continue
+      const key = `${s.latitude.toFixed(4)},${s.longitude.toFixed(4)}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      markers.push({ lat: s.latitude, lng: s.longitude, title: s.title, day: d.day_number, type: 'place' })
+    }
+    // Stay marker
+    if (d.accommodation) {
+      const accSeg = (d.segments || []).find((s) => s.type === 'activity' || s.type === 'travel')
+      const placeSeg = (d.segments || []).find((s) => s.latitude && s.longitude)
+      if (placeSeg?.latitude && placeSeg?.longitude) {
+        const key = `stay-${d.day_number}`
+        if (!seen.has(key)) {
+          seen.add(key)
+          markers.push({ lat: placeSeg.latitude, lng: placeSeg.longitude, title: d.accommodation.name, day: d.day_number, type: 'stay' })
+        }
+      }
+      void accSeg // suppress unused warning
+    }
+  }
+  return markers
+}
+
+function ItineraryTab({ data }: { data: RawItinerary }) {
   const [openDay, setOpenDay] = useState<number | null>(1)
-  const [mapOk, setMapOk] = useState(true)
+  const markers = buildMarkers(data)
 
   return (
     <div className="dash-itin-split">
-      {/* Day list */}
       <div className="dash-day-list">
         {data.days.map((d) => (
           <DayRow
@@ -151,17 +180,7 @@ function ItineraryTab({ data, tripId }: { data: RawItinerary; tripId: string }) 
           />
         ))}
       </div>
-      {/* Map */}
-      {mapOk && (
-        <div className="dash-map-panel">
-          <img
-            className="dash-map-img"
-            src={`/trips/${tripId}/map`}
-            alt="Trip map"
-            onError={() => setMapOk(false)}
-          />
-        </div>
-      )}
+      <TripMap markers={markers} />
     </div>
   )
 }
@@ -259,7 +278,7 @@ function TripDetail({ summary, data, onBack }: { summary: TripSummary; data: Raw
           ))}
         </nav>
         <div className="dash-itin-panel">
-          {tab === 'itinerary' && <ItineraryTab data={data} tripId={summary.trip_id} />}
+          {tab === 'itinerary' && <ItineraryTab data={data} />}
           {tab === 'stay'      && <StayTab data={data} />}
           {tab === 'dining'    && <DiningTab data={data} />}
           {tab === 'options'   && <OptionsTab data={data} />}
