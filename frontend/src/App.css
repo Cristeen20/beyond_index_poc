@@ -504,6 +504,25 @@
   background: var(--primary-softer);
 }
 
+/* ── Save to trips button ───────────────────────────── */
+.btn-save-trip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--primary-soft);
+  color: var(--primary);
+  border: 1px solid var(--primary);
+  border-radius: 10px;
+  padding: 8px 16px;
+  font-family: var(--font);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background .15s, transform .08s;
+}
+.btn-save-trip:hover { background: var(--primary); color: #fff; }
+.btn-save-trip:active { transform: scale(0.97); }
+
 /* ── Input form ─────────────────────────────────────── */
 .chat-footer {
   border-top: 1px solid var(--border);

@@ -89,6 +89,7 @@ export default function App() {
                 isLoading: false,
                 text: rendered,
                 optionsPayload: data.options_payload ?? undefined,
+                hasItinerary: !!data.itinerary,
               }
             : m,
         ),
@@ -161,6 +162,7 @@ export default function App() {
                 message={msg}
                 onOptionAction={msg.id === lastInteractiveId ? handleOptionAction : undefined}
                 optionActionDisabled={isLoading}
+                onSaveToTrips={msg.hasItinerary ? () => setPage('dashboard') : undefined}
               />
             ))}
             <div ref={bottomRef} />

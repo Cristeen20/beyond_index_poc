@@ -6,9 +6,10 @@ interface Props {
   message: Message
   onOptionAction?: (action: OptionAction) => void
   optionActionDisabled?: boolean
+  onSaveToTrips?: () => void
 }
 
-export default function ChatMessage({ message, onOptionAction, optionActionDisabled }: Props) {
+export default function ChatMessage({ message, onOptionAction, optionActionDisabled, onSaveToTrips }: Props) {
   if (message.role === 'user') {
     return (
       <div className="message message-user">
@@ -50,6 +51,11 @@ export default function ChatMessage({ message, onOptionAction, optionActionDisab
         <div className="bubble bubble-assistant">{message.text}</div>
       )}
       {message.itinerary && <ItineraryCard itinerary={message.itinerary} />}
+      {onSaveToTrips && (
+        <button className="btn-save-trip" onClick={onSaveToTrips}>
+          💾 View in My Trips
+        </button>
+      )}
       {message.optionsPayload && onOptionAction && (
         <OptionsCard
           payload={message.optionsPayload}
