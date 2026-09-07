@@ -20,7 +20,7 @@ interface RawDay {
   date: string
   day_name?: string
   location: string
-  accommodation?: { name: string; address?: string } | null
+  accommodation?: { name: string; address?: string; latitude?: number; longitude?: number } | null
   segments?: Segment[]
   notes?: string[]
 }
@@ -138,27 +138,24 @@ function DayRow({ day, open, onToggle }: { day: RawDay; open: boolean; onToggle:
 function buildMarkers(data: RawItinerary): MapMarker[] {
   const markers: MapMarker[] = []
   const seen = new Set<string>()
+
+  function addPin(lat: number, lng: number, title: string, day: number, type: MapMarker['type']) {
+    const key = `${lat.toFixed(4)},${lng.toFixed(4)}`
+    if (seen.has(key)) return
+    seen.add(key)
+    markers.push({ lat, lng, title, day, type })
+  }
+
   for (const d of data.days) {
-    // Activity/segment markers
+    // Segment-level coordinates (from back-fill in assemble_itinerary_node)
     for (const s of d.segments || []) {
-      if (!s.latitude || !s.longitude) continue
-      const key = `${s.latitude.toFixed(4)},${s.longitude.toFixed(4)}`
-      if (seen.has(key)) continue
-      seen.add(key)
-      markers.push({ lat: s.latitude, lng: s.longitude, title: s.title, day: d.day_number, type: 'place' })
-    }
-    // Stay marker
-    if (d.accommodation) {
-      const accSeg = (d.segments || []).find((s) => s.type === 'activity' || s.type === 'travel')
-      const placeSeg = (d.segments || []).find((s) => s.latitude && s.longitude)
-      if (placeSeg?.latitude && placeSeg?.longitude) {
-        const key = `stay-${d.day_number}`
-        if (!seen.has(key)) {
-          seen.add(key)
-          markers.push({ lat: placeSeg.latitude, lng: placeSeg.longitude, title: d.accommodation.name, day: d.day_number, type: 'stay' })
-        }
+      if (s.latitude && s.longitude) {
+        addPin(s.latitude, s.longitude, s.title, d.day_number, 'place')
       }
-      void accSeg // suppress unused warning
+    }
+    // Accommodation coordinates (always present on HotelOption)
+    if (d.accommodation?.latitude && d.accommodation?.longitude) {
+      addPin(d.accommodation.latitude, d.accommodation.longitude, d.accommodation.name, d.day_number, 'stay')
     }
   }
   return markers

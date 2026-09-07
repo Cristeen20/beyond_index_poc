@@ -208,23 +208,45 @@ def assemble_itinerary_node(state: PlanningState) -> dict:
     days = _hydrate_days(raw.get("days", []), _hotels_by_id(state))
     trip = state.trip_request
 
-    # Back-fill lat/lng on each segment by matching item_ref to the
-    # picked events, hotels, and restaurants — the LLM doesn't emit
-    # coordinates but we have them in state from the Google Places calls.
-    coords: dict[str, tuple[float, float]] = {}
+    # Back-fill lat/lng on segments.  Two strategies:
+    # 1. Exact item_ref → id match  (works when LLM follows rule 7)
+    # 2. Fuzzy name match as fallback (handles cases where LLM skips item_ref)
+    id_coords: dict[str, tuple[float, float]] = {}
+    name_coords: dict[str, tuple[float, float]] = {}
+
+    def _add(id_key: str, name_key: str, lat: float, lng: float) -> None:
+        if id_key:
+            id_coords[id_key] = (lat, lng)
+        if name_key:
+            name_coords[name_key.lower().strip()] = (lat, lng)
+
     for e in (state.event_options or []):
-        if e.event_id and e.latitude and e.longitude:
-            coords[e.event_id] = (e.latitude, e.longitude)
+        if e.latitude and e.longitude:
+            _add(e.event_id, e.name, e.latitude, e.longitude)
     for h in (state.hotel_options or []):
-        if h.hotel_id and h.latitude and h.longitude:
-            coords[h.hotel_id] = (h.latitude, h.longitude)
+        if h.latitude and h.longitude:
+            _add(h.hotel_id, h.name, h.latitude, h.longitude)
     for r in (state.restaurant_options or []):
-        if r.restaurant_id and r.latitude and r.longitude:
-            coords[r.restaurant_id] = (r.latitude, r.longitude)
+        if r.latitude and r.longitude:
+            _add(r.restaurant_id, r.name, r.latitude, r.longitude)
+
     for d in days:
         for s in d.segments:
-            if s.item_ref and s.item_ref in coords and s.latitude is None:
-                s.latitude, s.longitude = coords[s.item_ref]
+            if s.latitude is not None:
+                continue
+            # Strategy 1: item_ref exact match
+            if s.item_ref and s.item_ref in id_coords:
+                lat, lng = id_coords[s.item_ref]
+                object.__setattr__(s, 'latitude', lat)
+                object.__setattr__(s, 'longitude', lng)
+                continue
+            # Strategy 2: segment title fuzzy-matches an option name
+            title = (s.title or "").lower().strip()
+            for name, (lat, lng) in name_coords.items():
+                if name and (name in title or title in name):
+                    object.__setattr__(s, 'latitude', lat)
+                    object.__setattr__(s, 'longitude', lng)
+                    break
 
     actual_total = _compute_total_cost(days, state.budget)
 
