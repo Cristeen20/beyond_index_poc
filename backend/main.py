@@ -84,55 +84,10 @@ class SaveTripRequest(BaseModel):
 
 @app.post("/trips/save")
 async def save_trip_endpoint(req: SaveTripRequest) -> dict:
-    """Explicitly save an itinerary to the dashboard (user-initiated).
-
-    Pulls event/hotel coordinates from the live checkpointer state so map
-    pins always reflect the places the user actually picked — regardless of
-    whether the serialised itinerary has a populated locations field.
-    """
+    """Explicitly save an itinerary to the dashboard (user-initiated)."""
     try:
-        from agent_models import ItineraryLocation
-        from travel_orchestrator import _get_graph
-
-        itin = Itinerary(**req.itinerary)
+        itin = Itinerary.model_validate(req.itinerary)
         itin = itin.model_copy(update={"user_id": req.user_id})
-
-        # Re-fetch picked place/stay coordinates from the session checkpoint.
-        try:
-            graph = _get_graph()
-            config = {"configurable": {"thread_id": req.session_id}}
-            snapshot = await graph.aget_state(config)
-            if snapshot and snapshot.values:
-                sv = snapshot.values
-                loc_seen: set[tuple] = set()
-                locs: list[ItineraryLocation] = []
-
-                for e in (sv.get("event_options") or []):
-                    lat = getattr(e, "latitude", None) or (e.get("latitude") if isinstance(e, dict) else None)
-                    lng = getattr(e, "longitude", None) or (e.get("longitude") if isinstance(e, dict) else None)
-                    name = getattr(e, "name", None) or (e.get("name") if isinstance(e, dict) else "")
-                    if lat and lng:
-                        key = (round(lat, 4), round(lng, 4))
-                        if key not in loc_seen:
-                            loc_seen.add(key)
-                            locs.append(ItineraryLocation(name=name, lat=lat, lng=lng, type="place"))
-
-                for h in (sv.get("hotel_options") or []):
-                    lat = getattr(h, "latitude", None) or (h.get("latitude") if isinstance(h, dict) else None)
-                    lng = getattr(h, "longitude", None) or (h.get("longitude") if isinstance(h, dict) else None)
-                    name = getattr(h, "name", None) or (h.get("name") if isinstance(h, dict) else "")
-                    if lat and lng:
-                        key = (round(lat, 4), round(lng, 4))
-                        if key not in loc_seen:
-                            loc_seen.add(key)
-                            locs.append(ItineraryLocation(name=name, lat=lat, lng=lng, type="stay"))
-
-                if locs:
-                    itin = itin.model_copy(update={"locations": locs})
-                    logger.info("save_trip: enriched with %d location(s) from checkpoint", len(locs))
-        except Exception as loc_err:
-            logger.warning("save_trip: could not enrich locations from checkpoint: %s", loc_err)
-
         await save_trip(get_pool(), itin, req.session_id)
         return {"trip_id": itin.trip_id, "status": "saved"}
     except Exception as exc:
