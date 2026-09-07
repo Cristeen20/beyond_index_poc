@@ -1,22 +1,23 @@
 import { useEffect, useState, type MouseEvent } from 'react'
 import type { TripSummary } from '../types'
 
-interface Props {
-  userId: string
-}
+interface Props { userId: string }
 
 interface Segment {
   start_time: string
+  end_time?: string
   title: string
   type: string
   cost: number
   location?: string
-  description?: string
+  latitude?: number
+  longitude?: number
 }
 
 interface RawDay {
   day_number: number
   date: string
+  day_name?: string
   location: string
   accommodation?: { name: string; address?: string } | null
   segments?: Segment[]
@@ -39,6 +40,15 @@ const TABS: { id: Tab; icon: string; label: string }[] = [
   { id: 'options',   icon: '⚙',  label: 'Options' },
 ]
 
+const TYPE_ICON: Record<string, string> = {
+  travel:    '✈',
+  activity:  '📍',
+  meal:      '🍽',
+  rest:      '😴',
+  free_time: '🌿',
+  buffer:    '⏱',
+}
+
 function shortDate(iso: string): string {
   return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 }
@@ -47,34 +57,112 @@ function formatDate(iso: string): string {
   return new Date(iso).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
 }
 
-// ── Tab panels ──────────────────────────────────────────────────────────────
+function shortDay(iso: string): string {
+  return new Date(iso).toLocaleDateString(undefined, { weekday: 'short' })
+}
 
-function ItineraryTab({ data }: { data: RawItinerary }) {
+function hhmm(t: string): string {
+  const s = t?.slice(11, 16)
+  if (!s || s === '00:00') return ''
+  const [h, m] = s.split(':').map(Number)
+  const ampm = h >= 12 ? 'PM' : 'AM'
+  return `${h % 12 || 12}:${String(m).padStart(2, '0')} ${ampm}`
+}
+
+// ── Day row ─────────────────────────────────────────────────────────────────
+
+function DayRow({ day, open, onToggle }: { day: RawDay; open: boolean; onToggle: () => void }) {
+  const activities = (day.segments || []).filter((s) => s.type !== 'buffer')
+  const summary = activities.slice(0, 3)
+
   return (
-    <div className="dash-tab-content">
-      {data.days.map((d) => (
-        <div key={d.day_number} className="dash-day">
-          <div className="dash-day-header">
-            <span className="dash-day-badge">Day {d.day_number}</span>
-            <span className="dash-day-meta">{shortDate(d.date)} · {d.location}</span>
-          </div>
-          <ol className="dash-segments">
-            {(d.segments || []).map((s, i) => {
-              const time = s.start_time?.slice(11, 16) ?? ''
-              return (
-                <li key={i} className="dash-segment">
-                  {time && <span className="dash-time">{time}</span>}
-                  <span className="dash-seg-title">{s.title}</span>
-                  {s.cost > 0 && <span className="dash-seg-cost">${s.cost.toFixed(0)}</span>}
-                </li>
-              )
-            })}
-          </ol>
-          {d.notes?.length ? (
-            <ul className="dash-day-notes">{d.notes.map((n, i) => <li key={i}>{n}</li>)}</ul>
-          ) : null}
+    <div className={`itin-day-row${open ? ' open' : ''}`}>
+      {/* Clickable header */}
+      <button className="itin-day-header" onClick={onToggle} aria-expanded={open}>
+        <div className="itin-day-timeline">
+          <span className="itin-day-dot" />
+          <span className="itin-day-line" />
         </div>
-      ))}
+        <div className="itin-day-meta">
+          <span className="itin-day-num">Day {day.day_number}</span>
+          <span className="itin-day-date">{shortDay(day.date)}, {shortDate(day.date)}</span>
+        </div>
+        <div className="itin-day-body">
+          <span className="itin-day-location">{day.location}</span>
+          {!open && (
+            <div className="itin-day-chips">
+              {summary.map((s, i) => (
+                <span key={i} className="itin-day-chip">
+                  {TYPE_ICON[s.type] || '📍'} {s.title}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+        <span className="itin-day-chevron">{open ? '▲' : '▼'}</span>
+      </button>
+
+      {/* Expanded segment cards */}
+      {open && (
+        <div className="itin-segments-grid">
+          {activities.map((s, i) => (
+            <div key={i} className="itin-seg-card">
+              <div className="itin-seg-card-top">
+                <span className="itin-seg-icon">{TYPE_ICON[s.type] || '📍'}</span>
+                {hhmm(s.start_time) && <span className="itin-seg-time">{hhmm(s.start_time)}</span>}
+              </div>
+              <span className="itin-seg-name">{s.title}</span>
+              {s.location && <span className="itin-seg-loc">{s.location}</span>}
+              {s.cost > 0 && <span className="itin-seg-cost">${s.cost.toFixed(0)}</span>}
+            </div>
+          ))}
+          {day.accommodation && (
+            <div className="itin-seg-card itin-seg-card--stay">
+              <div className="itin-seg-card-top">
+                <span className="itin-seg-icon">🛏</span>
+              </div>
+              <span className="itin-seg-name">{day.accommodation.name}</span>
+              {day.accommodation.address && (
+                <span className="itin-seg-loc">{day.accommodation.address}</span>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Tab panels ───────────────────────────────────────────────────────────────
+
+function ItineraryTab({ data, tripId }: { data: RawItinerary; tripId: string }) {
+  const [openDay, setOpenDay] = useState<number | null>(1)
+  const [mapOk, setMapOk] = useState(true)
+
+  return (
+    <div className="dash-itin-split">
+      {/* Day list */}
+      <div className="dash-day-list">
+        {data.days.map((d) => (
+          <DayRow
+            key={d.day_number}
+            day={d}
+            open={openDay === d.day_number}
+            onToggle={() => setOpenDay(openDay === d.day_number ? null : d.day_number)}
+          />
+        ))}
+      </div>
+      {/* Map */}
+      {mapOk && (
+        <div className="dash-map-panel">
+          <img
+            className="dash-map-img"
+            src={`/trips/${tripId}/map`}
+            alt="Trip map"
+            onError={() => setMapOk(false)}
+          />
+        </div>
+      )}
     </div>
   )
 }
@@ -84,8 +172,8 @@ function StayTab({ data }: { data: RawItinerary }) {
   for (const d of data.days) {
     if (!d.accommodation) continue
     const ex = groups.find((g) => g.name === d.accommodation!.name)
-    if (ex) { ex.nights.push(shortDate(d.date)) }
-    else { groups.push({ name: d.accommodation.name, address: d.accommodation.address, nights: [shortDate(d.date)] }) }
+    if (ex) ex.nights.push(shortDate(d.date))
+    else groups.push({ name: d.accommodation.name, address: d.accommodation.address, nights: [shortDate(d.date)] })
   }
   if (!groups.length) return <div className="dash-tab-content dash-tab-empty">No stays recorded.</div>
   return (
@@ -113,7 +201,7 @@ function DiningTab({ data }: { data: RawItinerary }) {
     <div className="dash-tab-content">
       {meals.map((m, i) => (
         <div key={i} className="dash-dining-row">
-          <span className="dash-time">{m.start_time?.slice(11, 16) ?? ''}</span>
+          <span className="dash-time">{hhmm(m.start_time)}</span>
           <div className="dash-dining-info">
             <span className="dash-seg-title">{m.title}</span>
             {m.location && <span className="dash-dining-loc">{m.location}</span>}
@@ -145,7 +233,7 @@ function OptionsTab({ data }: { data: RawItinerary }) {
   )
 }
 
-// ── Single trip detail view ─────────────────────────────────────────────────
+// ── Single trip detail ───────────────────────────────────────────────────────
 
 function TripDetail({ summary, data, onBack }: { summary: TripSummary; data: RawItinerary; onBack: () => void }) {
   const [tab, setTab] = useState<Tab>('itinerary')
@@ -165,18 +253,14 @@ function TripDetail({ summary, data, onBack }: { summary: TripSummary; data: Raw
       <div className="dash-itin-layout">
         <nav className="dash-tab-nav">
           {TABS.map((t) => (
-            <button
-              key={t.id}
-              className={`dash-tab-btn${tab === t.id ? ' active' : ''}`}
-              onClick={() => setTab(t.id)}
-            >
+            <button key={t.id} className={`dash-tab-btn${tab === t.id ? ' active' : ''}`} onClick={() => setTab(t.id)}>
               <span className="dash-tab-icon">{t.icon}</span>
               <span className="dash-tab-label">{t.label}</span>
             </button>
           ))}
         </nav>
         <div className="dash-itin-panel">
-          {tab === 'itinerary' && <ItineraryTab data={data} />}
+          {tab === 'itinerary' && <ItineraryTab data={data} tripId={summary.trip_id} />}
           {tab === 'stay'      && <StayTab data={data} />}
           {tab === 'dining'    && <DiningTab data={data} />}
           {tab === 'options'   && <OptionsTab data={data} />}
@@ -186,7 +270,7 @@ function TripDetail({ summary, data, onBack }: { summary: TripSummary; data: Raw
   )
 }
 
-// ── Main Dashboard ──────────────────────────────────────────────────────────
+// ── Main Dashboard ───────────────────────────────────────────────────────────
 
 export default function Dashboard({ userId }: Props) {
   const [trips, setTrips] = useState<TripSummary[]>([])
@@ -219,26 +303,13 @@ export default function Dashboard({ userId }: Props) {
     try {
       await fetch(`/trips/${tripId}`, { method: 'DELETE' })
       setTrips((prev) => prev.filter((t) => t.trip_id !== tripId))
-    } catch {
-      // silent
-    }
+      if (selected?.summary.trip_id === tripId) setSelected(null)
+    } catch { /* silent */ }
   }
 
-  // Show detail view when a trip is selected
-  if (selected) {
-    return (
-      <div className="dashboard">
-        <TripDetail summary={selected.summary} data={selected.data} onBack={() => setSelected(null)} />
-      </div>
-    )
-  }
-
+  if (selected) return <div className="dashboard"><TripDetail summary={selected.summary} data={selected.data} onBack={() => setSelected(null)} /></div>
   if (loading || detailLoading) return <div className="dashboard"><div className="dashboard-empty">Loading…</div></div>
-  if (!trips.length) return (
-    <div className="dashboard">
-      <div className="dashboard-empty">No saved trips yet — plan your first trip in the Chat tab!</div>
-    </div>
-  )
+  if (!trips.length) return <div className="dashboard"><div className="dashboard-empty">No saved trips yet — plan your first trip in the Chat tab!</div></div>
 
   return (
     <div className="dashboard">
