@@ -12,7 +12,6 @@ interface Segment {
   cost: number
   location?: string
   description?: string
-  item_ref?: string
 }
 
 interface RawDay {
@@ -40,17 +39,15 @@ const TABS: { id: Tab; icon: string; label: string }[] = [
   { id: 'options',   icon: '⚙',  label: 'Options' },
 ]
 
-function formatDate(iso: string): string {
-  return new Date(iso).toLocaleDateString(undefined, {
-    year: 'numeric', month: 'short', day: 'numeric',
-  })
-}
-
 function shortDate(iso: string): string {
   return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 }
 
-// ── Tab content panels ─────────────────────────────────────────────────────
+function formatDate(iso: string): string {
+  return new Date(iso).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
+}
+
+// ── Tab panels ──────────────────────────────────────────────────────────────
 
 function ItineraryTab({ data }: { data: RawItinerary }) {
   return (
@@ -83,27 +80,17 @@ function ItineraryTab({ data }: { data: RawItinerary }) {
 }
 
 function StayTab({ data }: { data: RawItinerary }) {
-  // Collect unique stays grouped by hotel name
-  const stayGroups: { name: string; address?: string; nights: string[] }[] = []
+  const groups: { name: string; address?: string; nights: string[] }[] = []
   for (const d of data.days) {
     if (!d.accommodation) continue
-    const existing = stayGroups.find((g) => g.name === d.accommodation!.name)
-    if (existing) {
-      existing.nights.push(shortDate(d.date))
-    } else {
-      stayGroups.push({
-        name: d.accommodation.name,
-        address: d.accommodation.address,
-        nights: [shortDate(d.date)],
-      })
-    }
+    const ex = groups.find((g) => g.name === d.accommodation!.name)
+    if (ex) { ex.nights.push(shortDate(d.date)) }
+    else { groups.push({ name: d.accommodation.name, address: d.accommodation.address, nights: [shortDate(d.date)] }) }
   }
-  if (!stayGroups.length) {
-    return <div className="dash-tab-content dash-tab-empty">No stays recorded.</div>
-  }
+  if (!groups.length) return <div className="dash-tab-content dash-tab-empty">No stays recorded.</div>
   return (
     <div className="dash-tab-content">
-      {stayGroups.map((g, i) => (
+      {groups.map((g, i) => (
         <div key={i} className="dash-stay-card">
           <span className="dash-stay-icon">🛏</span>
           <div className="dash-stay-info">
@@ -119,13 +106,9 @@ function StayTab({ data }: { data: RawItinerary }) {
 
 function DiningTab({ data }: { data: RawItinerary }) {
   const meals = data.days.flatMap((d) =>
-    (d.segments || [])
-      .filter((s) => s.type === 'meal')
-      .map((s) => ({ ...s, date: d.date, day: d.day_number }))
+    (d.segments || []).filter((s) => s.type === 'meal').map((s) => ({ ...s, date: d.date, day: d.day_number }))
   )
-  if (!meals.length) {
-    return <div className="dash-tab-content dash-tab-empty">No dining segments recorded.</div>
-  }
+  if (!meals.length) return <div className="dash-tab-content dash-tab-empty">No dining segments recorded.</div>
   return (
     <div className="dash-tab-content">
       {meals.map((m, i) => (
@@ -148,14 +131,8 @@ function DiningTab({ data }: { data: RawItinerary }) {
 function OptionsTab({ data }: { data: RawItinerary }) {
   return (
     <div className="dash-tab-content">
-      <div className="dash-option-row">
-        <span className="dash-option-label">Total days</span>
-        <span className="dash-option-value">{data.days.length}</span>
-      </div>
-      <div className="dash-option-row">
-        <span className="dash-option-label">Estimated cost</span>
-        <span className="dash-option-value">~${data.total_cost.toFixed(0)}</span>
-      </div>
+      <div className="dash-option-row"><span className="dash-option-label">Total days</span><span className="dash-option-value">{data.days.length}</span></div>
+      <div className="dash-option-row"><span className="dash-option-label">Estimated cost</span><span className="dash-option-value">~${data.total_cost.toFixed(0)}</span></div>
       <div className="dash-option-row">
         <span className="dash-option-label">Dates</span>
         <span className="dash-option-value">
@@ -163,57 +140,60 @@ function OptionsTab({ data }: { data: RawItinerary }) {
           {data.days.length > 1 && ` – ${shortDate(data.days[data.days.length - 1].date)}`}
         </span>
       </div>
-      {data.notes?.length ? (
-        <div className="dash-option-notes">
-          {data.notes.map((n, i) => <p key={i}>{n}</p>)}
-        </div>
-      ) : null}
+      {data.notes?.length ? <div className="dash-option-notes">{data.notes.map((n, i) => <p key={i}>{n}</p>)}</div> : null}
     </div>
   )
 }
 
-function ExpandedItinerary({ data }: { data: RawItinerary }) {
-  const [tab, setTab] = useState<Tab>('itinerary')
+// ── Single trip detail view ─────────────────────────────────────────────────
 
+function TripDetail({ summary, data, onBack }: { summary: TripSummary; data: RawItinerary; onBack: () => void }) {
+  const [tab, setTab] = useState<Tab>('itinerary')
   return (
-    <div className="dash-itin-layout">
-      {/* Left tab column */}
-      <nav className="dash-tab-nav">
-        {TABS.map((t) => (
-          <button
-            key={t.id}
-            className={`dash-tab-btn${tab === t.id ? ' active' : ''}`}
-            onClick={() => setTab(t.id)}
-          >
-            <span className="dash-tab-icon">{t.icon}</span>
-            <span className="dash-tab-label">{t.label}</span>
-          </button>
-        ))}
-      </nav>
-      {/* Right content */}
-      <div className="dash-itin-panel">
-        <div className="dash-itin-panel-header">
-          <span className="dash-itin-title">{data.title}</span>
-          <span className="dash-itin-cost">~${data.total_cost.toFixed(0)}</span>
+    <div className="dash-detail">
+      <div className="dash-detail-topbar">
+        <button className="dash-back-btn" onClick={onBack}>← My Trips</button>
+        <div className="dash-detail-meta">
+          <span className="dash-detail-title">{data.title}</span>
+          <span className="dash-detail-sub">
+            {summary.destination && `${summary.destination} · `}
+            {formatDate(summary.created_at)}
+            {data.total_cost > 0 && ` · ~$${data.total_cost.toFixed(0)}`}
+          </span>
         </div>
-        {tab === 'itinerary' && <ItineraryTab data={data} />}
-        {tab === 'stay'      && <StayTab data={data} />}
-        {tab === 'dining'    && <DiningTab data={data} />}
-        {tab === 'options'   && <OptionsTab data={data} />}
+      </div>
+      <div className="dash-itin-layout">
+        <nav className="dash-tab-nav">
+          {TABS.map((t) => (
+            <button
+              key={t.id}
+              className={`dash-tab-btn${tab === t.id ? ' active' : ''}`}
+              onClick={() => setTab(t.id)}
+            >
+              <span className="dash-tab-icon">{t.icon}</span>
+              <span className="dash-tab-label">{t.label}</span>
+            </button>
+          ))}
+        </nav>
+        <div className="dash-itin-panel">
+          {tab === 'itinerary' && <ItineraryTab data={data} />}
+          {tab === 'stay'      && <StayTab data={data} />}
+          {tab === 'dining'    && <DiningTab data={data} />}
+          {tab === 'options'   && <OptionsTab data={data} />}
+        </div>
       </div>
     </div>
   )
 }
 
-// ── Main Dashboard ─────────────────────────────────────────────────────────
+// ── Main Dashboard ──────────────────────────────────────────────────────────
 
 export default function Dashboard({ userId }: Props) {
   const [trips, setTrips] = useState<TripSummary[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [expanded, setExpanded] = useState<string | null>(null)
-  const [expandedData, setExpandedData] = useState<Record<string, RawItinerary>>({})
-  const [expandLoading, setExpandLoading] = useState<string | null>(null)
+  const [selected, setSelected] = useState<{ summary: TripSummary; data: RawItinerary } | null>(null)
+  const [detailLoading, setDetailLoading] = useState(false)
 
   useEffect(() => {
     if (!userId) return
@@ -221,38 +201,41 @@ export default function Dashboard({ userId }: Props) {
     fetch(`/trips?user_id=${encodeURIComponent(userId)}`)
       .then((r) => r.json())
       .then((data) => { setTrips(data); setLoading(false) })
-      .catch(() => { setError('Could not load trips.'); setLoading(false) })
+      .catch(() => { setLoading(false) })
   }, [userId])
+
+  async function openTrip(summary: TripSummary) {
+    setDetailLoading(true)
+    try {
+      const r = await fetch(`/trips/${summary.trip_id}`)
+      const data: RawItinerary = await r.json()
+      setSelected({ summary, data })
+    } finally {
+      setDetailLoading(false)
+    }
+  }
 
   async function handleDelete(e: MouseEvent, tripId: string) {
     e.stopPropagation()
     try {
       await fetch(`/trips/${tripId}`, { method: 'DELETE' })
       setTrips((prev) => prev.filter((t) => t.trip_id !== tripId))
-      if (expanded === tripId) setExpanded(null)
     } catch {
       // silent
     }
   }
 
-  async function toggleExpand(tripId: string) {
-    if (expanded === tripId) { setExpanded(null); return }
-    setExpanded(tripId)
-    if (expandedData[tripId]) return
-    setExpandLoading(tripId)
-    try {
-      const r = await fetch(`/trips/${tripId}`)
-      const data: RawItinerary = await r.json()
-      setExpandedData((prev) => ({ ...prev, [tripId]: data }))
-    } catch {
-      // leave empty
-    } finally {
-      setExpandLoading(null)
-    }
+  // Show detail view when a trip is selected
+  if (selected) {
+    return (
+      <div className="dashboard">
+        <TripDetail summary={selected.summary} data={selected.data} onBack={() => setSelected(null)} />
+      </div>
+    )
   }
 
-  if (loading) return <div className="dashboard"><div className="dashboard-empty">Loading your trips…</div></div>
-  if (error)   return <div className="dashboard"><div className="dashboard-empty dashboard-error">{error}</div></div>
+  if (loading || detailLoading) return <div className="dashboard"><div className="dashboard-empty">Loading…</div></div>
+  if (error) return <div className="dashboard"><div className="dashboard-empty dashboard-error">{error}</div></div>
   if (!trips.length) return (
     <div className="dashboard">
       <div className="dashboard-empty">No saved trips yet — plan your first trip in the Chat tab!</div>
@@ -266,11 +249,7 @@ export default function Dashboard({ userId }: Props) {
         {trips.map((t) => (
           <div key={t.trip_id} className="dashboard-card">
             <div className="dashboard-card-header">
-              <button
-                className="dash-card-expand"
-                onClick={() => toggleExpand(t.trip_id)}
-                aria-expanded={expanded === t.trip_id}
-              >
+              <button className="dash-card-expand" onClick={() => openTrip(t)}>
                 <div className="dash-card-info">
                   <span className="dash-card-title">{t.title}</span>
                   <span className="dash-card-meta">
@@ -279,27 +258,10 @@ export default function Dashboard({ userId }: Props) {
                     {t.total_cost > 0 && ` · ~$${t.total_cost.toFixed(0)}`}
                   </span>
                 </div>
-                <span className="dash-card-chevron">{expanded === t.trip_id ? '▲' : '▼'}</span>
+                <span className="dash-card-chevron">›</span>
               </button>
-              <button
-                className="dash-card-delete"
-                onClick={(e) => handleDelete(e, t.trip_id)}
-                title="Delete trip"
-                aria-label="Delete trip"
-              >🗑</button>
+              <button className="dash-card-delete" onClick={(e) => handleDelete(e, t.trip_id)} title="Delete" aria-label="Delete trip">🗑</button>
             </div>
-
-            {expanded === t.trip_id && (
-              <div className="dashboard-card-body">
-                {expandLoading === t.trip_id ? (
-                  <div className="dash-expand-loading">Loading…</div>
-                ) : expandedData[t.trip_id] ? (
-                  <ExpandedItinerary data={expandedData[t.trip_id]} />
-                ) : (
-                  <div className="dash-expand-loading">Could not load details.</div>
-                )}
-              </div>
-            )}
           </div>
         ))}
       </div>
