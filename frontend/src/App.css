@@ -196,62 +196,128 @@
   padding: 12px 0;
 }
 
-/* ── Expanded itinerary in dashboard ─────────────────── */
-.dashboard-itinerary { display: flex; flex-direction: column; gap: 16px; }
+/* ── Expanded itinerary — tab layout ─────────────────── */
+.dash-itin-layout {
+  display: flex;
+  gap: 0;
+  min-height: 280px;
+}
 
-.dash-itin-header {
+/* Left tab nav */
+.dash-tab-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 8px;
+  background: var(--surface-alt);
+  border-right: 1px solid var(--border);
+  min-width: 90px;
+  flex-shrink: 0;
+  border-radius: 0 0 0 var(--radius);
+}
+
+.dash-tab-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 10px 6px;
+  background: none;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background .12s, color .12s;
+  color: var(--text-muted);
+}
+.dash-tab-btn:hover { background: var(--surface); color: var(--text); }
+.dash-tab-btn.active {
+  background: var(--primary-soft);
+  color: var(--primary);
+}
+.dash-tab-icon { font-size: 16px; }
+.dash-tab-label { font-size: 11px; font-weight: 500; }
+
+/* Right panel */
+.dash-itin-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.dash-itin-panel-header {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
   gap: 12px;
+  padding: 12px 16px 8px;
+  border-bottom: 1px solid var(--border);
 }
-.dash-itin-title { font-size: 15px; font-weight: 600; color: var(--text); }
-.dash-itin-cost { font-size: 13px; color: var(--text-muted); }
+.dash-itin-title { font-size: 14px; font-weight: 600; color: var(--text); }
+.dash-itin-cost { font-size: 12.5px; color: var(--text-muted); flex-shrink: 0; }
 
-.dash-days { display: flex; flex-direction: column; gap: 14px; }
-
-.dash-day {
-  border-top: 1px dashed var(--border);
-  padding-top: 12px;
-}
-.dash-day:first-child { border-top: none; padding-top: 0; }
-
-.dash-day-header {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-bottom: 8px;
-}
-.dash-day-header strong { font-size: 13px; color: var(--primary); }
-.dash-day-meta { font-size: 12.5px; color: var(--text-muted); }
-.dash-hotel { font-size: 12.5px; color: var(--text-muted); }
-
-.dash-segments {
-  list-style: none;
+/* Tab content area */
+.dash-tab-content {
+  padding: 12px 16px;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 5px;
-  padding-left: 4px;
+  gap: 12px;
+  max-height: 340px;
 }
+.dash-tab-empty { color: var(--text-muted); font-size: 13px; padding: 24px 0; text-align: center; }
 
-.dash-segment {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
+/* Itinerary tab */
+.dash-day { display: flex; flex-direction: column; gap: 4px; border-top: 1px dashed var(--border); padding-top: 10px; }
+.dash-day:first-child { border-top: none; padding-top: 0; }
+.dash-day-header { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 4px; }
+.dash-day-badge {
+  font-size: 11px; font-weight: 700; color: var(--primary);
+  background: var(--primary-soft); padding: 2px 8px; border-radius: 99px;
+}
+.dash-day-meta { font-size: 12px; color: var(--text-muted); }
+.dash-segments { list-style: none; display: flex; flex-direction: column; gap: 4px; }
+.dash-segment { display: flex; align-items: baseline; gap: 8px; font-size: 12.5px; }
+.dash-time { color: var(--primary); font-weight: 600; width: 40px; flex-shrink: 0; font-size: 11.5px; }
+.dash-seg-title { flex: 1; color: var(--text); }
+.dash-seg-cost { color: var(--text-muted); font-size: 11.5px; flex-shrink: 0; }
+.dash-day-notes { margin-top: 4px; font-size: 12px; color: var(--text-muted); font-style: italic; }
+.dash-day-notes li::before { content: '• '; }
+
+/* Stay tab */
+.dash-stay-card {
+  display: flex; gap: 12px; align-items: flex-start;
+  padding: 10px 12px; background: var(--surface-alt);
+  border: 1px solid var(--border); border-radius: 8px;
+}
+.dash-stay-icon { font-size: 18px; flex-shrink: 0; }
+.dash-stay-info { display: flex; flex-direction: column; gap: 2px; }
+.dash-stay-info strong { font-size: 13px; color: var(--text); }
+.dash-stay-addr { font-size: 12px; color: var(--text-muted); }
+.dash-stay-nights { font-size: 11.5px; color: var(--primary); font-weight: 500; margin-top: 2px; }
+
+/* Dining tab */
+.dash-dining-row {
+  display: flex; align-items: flex-start; gap: 10px;
+  padding: 8px 0; border-bottom: 1px solid var(--border);
+}
+.dash-dining-row:last-child { border-bottom: none; }
+.dash-dining-info { flex: 1; display: flex; flex-direction: column; gap: 2px; }
+.dash-dining-loc { font-size: 11.5px; color: var(--text-muted); }
+.dash-dining-right { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; flex-shrink: 0; }
+.dash-dining-date { font-size: 11px; color: var(--text-subtle); }
+
+/* Options tab */
+.dash-option-row {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 8px 0; border-bottom: 1px solid var(--border);
   font-size: 13px;
 }
-.dash-time { color: var(--primary); font-weight: 600; width: 44px; flex-shrink: 0; font-size: 12px; }
-.dash-seg-title { flex: 1; color: var(--text); }
-.dash-seg-cost { color: var(--text-muted); font-size: 12px; flex-shrink: 0; }
-
-.dash-day-notes, .dash-global-notes {
-  margin-top: 6px;
-  font-size: 12.5px;
-  color: var(--text-muted);
-  font-style: italic;
-}
-.dash-day-notes li::before { content: '• '; }
+.dash-option-row:last-child { border-bottom: none; }
+.dash-option-label { color: var(--text-muted); }
+.dash-option-value { font-weight: 600; color: var(--text); }
+.dash-option-notes { margin-top: 8px; font-size: 12.5px; color: var(--text-muted); font-style: italic; }
 
 .header-badge {
   font-size: 10px;
